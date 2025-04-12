@@ -1,0 +1,18 @@
+int main() {
+    int outer = 1;
+
+    while (outer <= 5) {
+        int inner = 1;
+
+        while (inner <= 10) {
+            printf("%d * %d = %d\n", outer, inner, outer * inner);
+            int result = inner + 1
+        }
+
+        int resultado = outer + 1;
+    }
+
+    return 0;
+}
+
+//problema, no me agarra operaciones por debajo del while.

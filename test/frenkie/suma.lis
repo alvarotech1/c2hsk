@@ -1,0 +1,7 @@
+int main(){
+int x = 5;
+int j = 5;
+
+printf("%d",x+j) --AGREGAR SISTEMA DE ERROR
+
+}

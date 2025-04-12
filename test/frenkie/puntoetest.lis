@@ -1,0 +1,24 @@
+int main() {
+    int a = 10;
+    int b = 5;
+    int result = 0;
+    int c = 5;
+    int d = 10;
+
+    printf("a + b = %d\n", a + b);  
+
+    printf("\nOperadores logicos\n");
+    int x = 1;
+    int y = 0;
+
+   int funcion = suma(x,y);
+    
+    result = (a + b > 10) && (c / d < 6);
+    printf("result = %d\n", result);  
+
+    return 0
+} 
+
+int suma(int a, int b) {
+    return a + b
+}

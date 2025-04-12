@@ -1,0 +1,9 @@
+int main()
+{
+int edad = 25;
+float altura = 1.75;
+double peso = 68.5;
+char letra = 'A';
+long poblacion = 7800000000;
+short temperatura = -5
+}

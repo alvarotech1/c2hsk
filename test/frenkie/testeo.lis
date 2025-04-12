@@ -1,0 +1,12 @@
+int main() { 
+    int x = 10;
+    x = x + 5;
+
+    if (x > 10) {
+        print("Mayor que 10");
+    } else {
+        print("Menor o igual a 10");
+    } 
+
+    return x
+}

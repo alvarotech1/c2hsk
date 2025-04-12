@@ -1,0 +1,14 @@
+int main() 
+{
+
+	int variable = 5;
+
+	if (variable == 5)
+	{
+		printf("La variable es %d",variable) //NO COLOCAR ";" PORQUE TIRA ERROR
+	}	
+	else
+	{
+		printf("La variable no es 5")
+	}
+}
