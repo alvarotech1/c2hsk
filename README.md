@@ -2,6 +2,7 @@
 
 **C2Haskell** es un proyecto en desarrollo cuyo objetivo es traducir programas escritos en C a su equivalente en Haskell, respetando las diferencias semánticas y estructurales entre ambos lenguajes. Este traductor está diseñado con un scope acotado, priorizando inicialmente la traducción de estructuras y construcciones comunes y simples del lenguaje C.
 
+
 > ⚠️ Este proyecto está en una etapa temprana de desarrollo. Las traducciones completas y complejas aún no están soportadas.
 
 ## ✨ Objetivo
@@ -32,3 +33,5 @@ Actualmente, el traductor soporta la conversión de los siguientes elementos:
 
 - **Foreign.Ptr**  
   Reconocimiento y manejo inicial de punteros usando el módulo `Foreign.Ptr` para compatibilidad con código de bajo nivel.
+
+![raw](https://github.com/user-attachments/assets/0871eb29-90a7-40dc-81c1-66676e8b7c84)
