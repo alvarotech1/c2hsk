@@ -13,25 +13,36 @@ Facilitar la comprensión y transición de programas escritos en C al paradigma 
 
 Actualmente, el traductor soporta la conversión de los siguientes elementos:
 
-- **Estructuras (`struct`)**  
-  Traducción de estructuras de datos de C a registros de Haskell.
+**Estructuras de control**  
+- `if-else` 
+- Bucles `while` 
+- Secuenciación de comandos (`;`)  
 
-- **Listas enlazadas**  
-  Reconocimiento de estructuras típicas de listas enlazadas y conversión a listas Haskell.
+**Manejo de funciones**  
+- Declaración de funciones con tipos de retorno  
+- Parámetros formales tipados  
+- `return` 
+- Llamadas a funciones simples  
 
-- **Arrays**  
-  Traducción de arreglos de C a listas o estructuras de tipo `Array` en Haskell.
+**Tipos básicos**  
+- `int`, `float`, `double`, `char`, `string`  
+- Promoción automática numérica (ej: `int + float → float`)  
 
-- **Manejo básico de archivos**  
-  Traducción de operaciones como `fopen`, `fread`, `fwrite`, y `fclose` a sus equivalentes en Haskell (`openFile`, `hGetContents`, etc).
+**Entrada/Salida**  
+- `printf` básico con strings literales y expresiones  
+- Traducción a `putStrLn` de Haskell  
 
-- **`printf` y salidas estándar**  
-  Conversión de salidas formateadas (`printf`) a `putStrLn`, `print`, o funciones similares de Haskell.
-
-- **Funciones en C**  
+**Funciones en C**  
   Traducción de definiciones de funciones simples a funciones puras en Haskell.
 
-- **Foreign.Ptr**  
-  Reconocimiento y manejo inicial de punteros usando el módulo `Foreign.Ptr` para compatibilidad con código de bajo nivel.
+### 📜 Características en proceso
+
+- Manejo de archivos
+- Arrays
+- Structs
+- Punteros
+- `for` loops
+- `switch` case
+
 
 ![raw](https://github.com/user-attachments/assets/0871eb29-90a7-40dc-81c1-66676e8b7c84)
