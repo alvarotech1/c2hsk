@@ -1,5 +1,7 @@
 module AST where
 
+import Control.Exception (Exception)
+
 type Variable = String
 
 -- Tipos de datos primitivos
@@ -11,7 +13,10 @@ data Type
     | TLong
     | TShort
     | TString
+    | TVoid
+    | TArray Type Int
     deriving (Show, Eq)
+
 
 -- Expresiones (sólo aritméticas)
 data Exp 
@@ -25,8 +30,14 @@ data Exp
     | SubExp Exp Exp
     | MulExp Exp Exp
     | DivExp Exp Exp
+    | ModExp Exp Exp  
     | CallExp Variable [Exp]  -- llamada a función con argumentos aritméticos
     | BoolAsIntExp BoolExp 
+    | PostIncr Variable     --  x++
+    | PostDecr Variable     --  x++
+    | PreIncr Variable      -- ++x
+    | PreDecr Variable      -- --x
+    | ArrayAccess Variable Exp -- arr[i]
     deriving (Show, Eq)
 
 -- Expresiones Booleanas, separadas
@@ -48,12 +59,23 @@ data BoolExp
 data Comm
     = Skip
     | LetType Type Variable Exp
+    | LetConst Type Variable Exp
+    | LetUninit Type Variable
     | Assign  Variable Exp
     | Seq Comm Comm
     | Cond BoolExp Comm Comm   -- if cond then c1 else c2
+    | CondNoElse BoolExp Comm
     | Repeat Comm BoolExp      -- repeat c until cond
+    | Break  
     | FuncDef Type Variable [(Type, Variable)] Comm
     | Return Exp
     | Printf String [Exp]
+    | Scanf String [Variable]
     | While BoolExp Comm
+    | DoWhile Comm BoolExp --  do { body } while (cond);
+    | ExprStmt Exp   -- permite ejecutar expresiones como comandos, ej. var++
+    | Block Comm
+    | For (Maybe Comm) BoolExp (Maybe Comm) Comm   -- init; cond; step { body }
+    | AssignArr Variable Exp Exp  -- arr[i] = e;
     deriving (Show, Eq)
+

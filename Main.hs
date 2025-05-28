@@ -20,5 +20,5 @@ run ifile = do
     s <- readFile ifile
     case parseComm ifile s of
       Left error -> print error
-      --Right t    -> eval t -- Traducir a Haskell e imprimir
-      Right t    -> print t  -- (debug) imprimir el AST crudo
+      Right t    -> eval t -- Traducir a Haskell e imprimir
+      --Right t    -> print t  -- (debug) imprimir el AST crudo

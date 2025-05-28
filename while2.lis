@@ -1,0 +1,14 @@
+int main()
+{
+	int var = 1;
+	int almacen = 0;
+
+	while (var == 1)
+	{
+		printf("hola");
+		almacen = var++;
+		printf("%d",almacen);
+	}
+
+	printf("hola");
+}

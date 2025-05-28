@@ -1,0 +1,5 @@
+int main() {
+    int x = 5;
+    int r = x % 2;
+    printf("resultado: %d\n", r);
+}
