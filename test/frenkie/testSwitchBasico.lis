@@ -1,0 +1,15 @@
+int main()
+{
+	int x = 1;
+
+	switch(x)
+	{
+	case 1:
+		printf("x es 1 wacho!");
+	case 2:
+		printf("x es 2 wacho!");
+	
+	default:
+		printf("no anda ninguno wacho");
+	}
+}

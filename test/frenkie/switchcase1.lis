@@ -1,0 +1,12 @@
+int main() {
+    int x = 1;
+
+    switch (x) {
+      case 0:
+        printf("cero\n");
+      case 1:
+        printf("uno\n");
+      default:
+        printf("fin\n");
+    }
+}

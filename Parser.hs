@@ -19,8 +19,8 @@ lis = makeTokenParser (emptyDef
     , commentEnd      = "*/"
     , commentLine     = "//"
     , reservedNames   = ["true","false","skip","if","then","else","end",
-                         "while","do","return","printf", "void","for", "const","break","scanf"]
-    , reservedOpNames = [ "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "!", "=", ";", "{", "}", ",", "(", ")" ]
+                         "while","do","return","printf", "void","for", "const","break","scanf","switch","case","default"]
+    , reservedOpNames = [ "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "!", "=", ";", "{", "}", ",", "(", ")",":" ]
     }
   )
 
@@ -239,6 +239,7 @@ commNoSemicolon =
   <|> try parseIfOnly
   <|> try parseWhile
   <|> try parseDoWhile
+  <|> try parseSwitch  
   <|> try parseFor
   <|> try commBlock
 
@@ -255,6 +256,67 @@ parseExprStmt = do
 
 parseBreak :: Parser Comm
 parseBreak = reserved lis "break" >> return Break
+
+
+------------------------------------------------------------------
+-- switch (expr) { case … ; … ; default: … }
+------------------------------------------------------------------
+
+parseSwitch :: Parser Comm
+parseSwitch = do
+    reserved lis "switch"
+    scrut <- parens lis (try (BoolAsIntExp <$> boolexp) <|> intexp)
+    reservedOp lis "{"
+    sections <- many1 parseSection
+    reservedOp lis "}"
+
+    -- si hay default lo enviamos al final
+    let (defs , cases) = span isDefault sections
+        finalCases     = cases ++ defs
+    return (Switch scrut finalCases)
+  where
+    isDefault DefaultCase{} = True
+    isDefault _             = False
+
+    --------------------------------------------------------------
+    -- Secciones -------------------------------------------------
+    --------------------------------------------------------------
+    parseSection :: Parser Case
+    parseSection =  try parseCase
+                <|> parseDefault
+
+    -- case LABEL:
+    parseCase = do
+        reserved lis "case"
+        lbl <- parseLabel
+        reservedOp lis ":"
+        body <- parseCaseBody
+        return (Case lbl body)
+
+    -- default:
+    parseDefault = do
+        reserved lis "default"
+        reservedOp lis ":"
+        DefaultCase <$> parseCaseBody
+
+    -- LABEL  ::=  entero | char | bool
+    parseLabel =
+          try (BoolAsIntExp <$> boolexp)  -- true / false
+      <|> try parseChar                    -- 'x'
+      <|> parseInt                         -- 42
+
+    --------------------------------------------------------------
+    -- Cuerpo: lee comandos hasta el próximo case|default|}
+    --------------------------------------------------------------
+    parseCaseBody =
+        fmap (foldr Seq Skip)
+             (manyTill caseStmt
+                       (lookAhead (   try (reserved lis "case")
+                                  <|> try (reserved lis "default")
+                                  <|> reservedOp lis "}")))
+
+    -- Dentro de un case admitimos *cualquier* comando:
+    caseStmt = try commSemicolon <|> commNoSemicolon
 
 
 -- do { … } while ( … );
@@ -390,19 +452,22 @@ parseVarDecl = try $ do
 --VARDECL SIGMA CON IMPLEMENTACION DE CONST
 parseVarDecl :: Parser Comm
 parseVarDecl = try $ do
-    isConst <- optionMaybe (reserved lis "const")  -- detecta si viene "const"
-    t     <- typeParser
-    decls <- commaSep1 lis $ do
-        name <- identifier lis
-        notFollowedBy (parens lis (commaSep lis parseParam))
-        mInit <- optionMaybe (reservedOp lis "=" >> intexp)
-        return (name, mInit)
-    let
-      toLet (v, me) =
-        case isConst of
-          Just _  -> LetConst t v (maybe (defaultInit t) id me)  -- si venía const
-          Nothing -> LetType  t v (maybe (defaultInit t) id me)  -- si no venía const
-    return (foldr1 Seq (map toLet decls))
+    isConst <- optionMaybe (reserved lis "const")    -- ¿lleva const?
+    t       <- typeParser
+    decls   <- commaSep1 lis $ do
+        name  <- identifier lis
+        mSize <- optionMaybe           -- ← soporta  a[10]
+                 (brackets lis (fromInteger <$> integer lis))
+        notFollowedBy (parens lis (commaSep lis parseParam)) -- no confundir con prototipo
+        mInit <- optionMaybe (reservedOp lis "=" >> intexp)  -- inicializador opcional
+        let realType = maybe t (\n -> TArray t n) mSize
+        return (realType, name, mInit)
+
+    let mkLet (ty,v,me) = case isConst of
+            Just _  -> LetConst ty v (maybe (defaultInit ty) id me)
+            Nothing -> LetType  ty v (maybe (defaultInit ty) id me)
+
+    return (foldr1 Seq (map mkLet decls))
 
 
 -- identificador '[' exp ']'

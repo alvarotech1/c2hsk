@@ -1,0 +1,22 @@
+int main() {
+    // Declaro un array de 3 enteros
+    int arr[3];
+	arr[0] = 1;
+	arr[1] = 2;
+	arr[2] = 3;
+
+    int i = 0;
+
+    do {
+        // doblo cada elemento y muestro su valor
+        arr[i] = arr[i] * 2;
+        printf("%d ", arr[i]);
+
+        // incremento el índice
+        i = i + 1;
+    } while (i < 3);
+
+    // al final salto de línea
+    printf("\n");
+    return 0;
+}

@@ -77,5 +77,10 @@ data Comm
     | Block Comm
     | For (Maybe Comm) BoolExp (Maybe Comm) Comm   -- init; cond; step { body }
     | AssignArr Variable Exp Exp  -- arr[i] = e;
+    | Switch Exp [Case]         -- switch (e) { … }
     deriving (Show, Eq)
 
+data Case
+    = Case      Exp   Comm      -- case v:  …
+    | DefaultCase Comm          -- default: …
+    deriving (Show, Eq)

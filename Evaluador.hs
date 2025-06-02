@@ -534,29 +534,29 @@ evalComm ioFns (For mInit cond mStep body) indent env = do
   ----------------------------------------------------------------
   -- 1) Variable de control y nombres auxiliares
   ----------------------------------------------------------------
-  let ctrlVar   = case cond of
-                    BTrue -> "dummy"
-                    _     -> extractControlVar cond
-      loopName  = "forLoop_" ++ ctrlVar
+  let ctrlVar           = case cond of
+                             BTrue -> "dummy"
+                             _     -> extractControlVar cond
+      loopName          = "forLoop_" ++ ctrlVar
       (paramCtrl, env1) = nextVarName ctrlVar envInit
 
-  ----------------------------------------------------------------
-  -- 2) Detectar el arreglo mutado (exactamente uno)
-  ----------------------------------------------------------------
+      ----------------------------------------------------------------
+      -- 2) Detectar arreglo(s) mutado(s)
+      --    • 0  →  permitido (nuevo)
+      --    • 1  →  comportamiento previo
+      --    • >1 →  seguimos rechazando
+      ----------------------------------------------------------------
       arrsMut = nub (arraysWritten body)
-  unless (length arrsMut == 1) $
+  unless (length arrsMut <= 1) $
       error "Solo se admite un arreglo modificado por for."
-  let arr           = head arrsMut
-      arrInitName   = currentVarName arr envInit
-      arrParam      = arrInitName
 
   ----------------------------------------------------------------
   -- 3) Condición del for
   ----------------------------------------------------------------
-      condStr = evalBoolExp cond env1
+  let condStr = evalBoolExp cond env1
 
   ----------------------------------------------------------------
-  -- 4) Traducir cuerpo y paso (note el indent+6 para el body y +8 para el step)
+  -- 4) Traducir cuerpo y paso
   ----------------------------------------------------------------
   (envBody, bodyLines) <- evalComm ioFns body (indent+6) env1
   (envStep, stepLines) <- maybe (return (envBody, []))
@@ -566,34 +566,59 @@ evalComm ioFns (For mInit cond mStep body) indent env = do
   ----------------------------------------------------------------
   -- 5) Nombres tras el paso
   ----------------------------------------------------------------
-  let nextCtrl  = currentVarName ctrlVar envStep
-      arrNewest = currentVarName arr envStep
+  let nextCtrl = currentVarName ctrlVar envStep
+      recIndent = indent + 8        -- mismo indent que bodyLines/stepLines
 
   ----------------------------------------------------------------
-  -- 6) Código Haskell generado
+  -- 6) Generar código según haya (o no) arreglo
   ----------------------------------------------------------------
-  let recIndent = indent + 8    -- mismo indent que bodyLines y stepLines
+  code <- case arrsMut of
+            --------------------------------------------------------
+            -- 0 arreglos mutados  ➜  solo control de flujo
+            --------------------------------------------------------
+            [] -> do
+              let callLine = indentStr indent
+                           ++ loopName ++ " "
+                           ++ currentVarName ctrlVar envInit
+                  code0 =
+                       initLines ++
+                       [ indentStr indent     ++ "let"
+                       , indentStr (indent+2) ++ loopName ++ " " ++ paramCtrl ++ " = do"
+                       , indentStr (indent+4) ++ "if (" ++ condStr ++ ") then do"
+                       ]
+                       ++ bodyLines
+                       ++ stepLines
+                       ++ [ indentStr recIndent ++ loopName ++ " " ++ nextCtrl
+                          , indentStr (indent+4) ++ "else return ()"
+                          , callLine
+                          ]
+              return code0
 
-      code =
-        initLines ++
-        [ indentStr indent     ++ "let"
-        , indentStr (indent+2) ++ loopName ++ " " ++ arrParam ++ " " ++ paramCtrl ++ " = do"
-        , indentStr (indent+4) ++ "if (" ++ condStr ++ ") then do"
-        ]
-        -- Aquí van primero las líneas del cuerpo (AssignArr, Printf, etc.)
-        ++ bodyLines
-        -- Luego las del paso (let i' = …), ahora con indent+8
-        ++ stepLines
-        -- Y justo después la llamada recursiva, **al mismo nivel** (indent+8)
-        ++ [ indentStr recIndent ++ loopName ++ " " ++ arrNewest ++ " " ++ nextCtrl
-           -- cerramos el 'then', y definimos la invocación al final
-           , indentStr (indent+4) ++ "else return " ++ arrParam
-           , indentStr indent     ++ currentVarName arr envStep ++ " <- "
-                                     ++ loopName ++ " " ++ arrInitName ++ " "
-                                     ++ currentVarName ctrlVar envInit
-           ]
+            --------------------------------------------------------
+            -- 1 arreglo mutado  ➜  comportamiento original
+            --------------------------------------------------------
+            (arr:_) -> do
+              let arrInitName = currentVarName arr envInit
+                  arrParam    = arrInitName
+                  arrNewest   = currentVarName arr envStep
+                  code1 =
+                       initLines ++
+                       [ indentStr indent     ++ "let"
+                       , indentStr (indent+2) ++ loopName ++ " " ++ arrParam ++ " " ++ paramCtrl ++ " = do"
+                       , indentStr (indent+4) ++ "if (" ++ condStr ++ ") then do"
+                       ]
+                       ++ bodyLines
+                       ++ stepLines
+                       ++ [ indentStr recIndent ++ loopName ++ " " ++ arrNewest ++ " " ++ nextCtrl
+                          , indentStr (indent+4) ++ "else return " ++ arrParam
+                          , indentStr indent     ++ currentVarName arr envStep ++ " <- "
+                                               ++ loopName ++ " " ++ arrInitName ++ " "
+                                               ++ currentVarName ctrlVar envInit
+                          ]
+              return code1
 
   return (envStep, code)
+
 
 
 evalComm _ Break indent env =
@@ -695,6 +720,73 @@ evalComm ioFns (DoWhile body cond) indent env = do
           ++ [callLn]
 
   return (envOut, code)
+
+--------------------------------------------------------------------
+--  SWITCH
+--------------------------------------------------------------------
+-- Genera código Haskell que emula el comportamiento de C:
+--   * sólo se ejecuta el primer ‘case’ que matchee;
+--   * ‘default’ se ejecuta si ningún ‘case’ matcheó.
+--------------------------------------------------------------------
+evalComm ioFns (Switch scrut cases) indent env0 = do
+  -- 1) Evaluar el valor del switch una sola vez
+  let (scrutVar, env1) = nextVarName "scrut" env0
+      scrutVal         = evalExp scrut env1
+      assignScrut      = indentStr indent ++ "let " ++ scrutVar ++ " = " ++ scrutVal
+
+  -- 2) Generar los bloques de cada case
+  (envOut, caseLines) <- genCases ioFns scrutVar cases "False" indent env1
+  return (envOut, assignScrut : caseLines)
+
+
+--------------------------------------------------------------------
+-- Generador recursivo de los ‘case’ / ‘default’
+--------------------------------------------------------------------
+genCases :: IOFuncs        -- ^ primitivas de IO
+         -> Variable       -- ^ variable con el valor ya evaluado del switch
+         -> [Case]         -- ^ lista de casos
+         -> String         -- ^ flag ‘matched’ acumulado
+         -> Int            -- ^ indentación actual
+         -> Env            -- ^ entorno actual
+         -> IO (Env,[String])
+genCases _ _ [] _ _ envAcc = return (envAcc, [])
+
+genCases ioFns scrVar (c:rest) matched indentCur envCur =
+  case c of
+    ----------------------------------------------------------
+    --            case  <const>:
+    ----------------------------------------------------------
+    Case lbl body -> do
+      let condLabel = scrVar ++ " == " ++ evalExp lbl envCur
+          condFull  = "(not (" ++ matched ++ ") && " ++ condLabel ++ ")"
+          matched'  = "(" ++ matched ++ " || " ++ condLabel ++ ")"
+          header    = indentStr indentCur ++ "if " ++ condFull ++ " then do"
+
+      (envBody, rawLines) <- evalComm ioFns body (indentCur + 4) envCur
+      let bodyLines = case rawLines of
+                         [] -> [indentStr (indentCur+4) ++ "return ()"]
+                         ls -> ls ++ [indentStr (indentCur+4) ++ "return ()"]
+          footer    = indentStr indentCur ++ "else return ()"
+
+      (envNext, restLines) <- genCases ioFns scrVar rest matched' indentCur envBody
+      return (envNext, header : bodyLines ++ [footer] ++ restLines)
+
+    ----------------------------------------------------------
+    --            default:
+    ----------------------------------------------------------
+    DefaultCase body -> do
+      let condFull = "not (" ++ matched ++ ")"
+          header   = indentStr indentCur ++ "if " ++ condFull ++ " then do"
+
+      (envBody, rawLines) <- evalComm ioFns body (indentCur + 4) envCur
+      let bodyLines = case rawLines of
+                         [] -> [indentStr (indentCur+4) ++ "return ()"]
+                         ls -> ls ++ [indentStr (indentCur+4) ++ "return ()"]
+          footer    = indentStr indentCur ++ "else return ()"
+
+      -- después de default no hace falta seguir evaluando condiciones
+      (envNext, restLines) <- genCases ioFns scrVar rest "True" indentCur envBody
+      return (envNext, header : bodyLines ++ [footer] ++ restLines)
 
 
 
@@ -1022,6 +1114,8 @@ genPureBody (CondNoElse cond cThen) env =
 genPureBody (Block c) env = genPureBody c env  -- <- Nueva línea
 genPureBody _ _ = error "genPureBody: cuerpo no soportado"
 
+
+
 ------------------------------------------------------------------
 -- Arrays modificados dentro de un comando
 ------------------------------------------------------------------
@@ -1032,6 +1126,9 @@ arraysWritten (Block c)             = arraysWritten c
 arraysWritten (Cond _ c1 c2)        = arraysWritten c1 ++ arraysWritten c2
 arraysWritten (CondNoElse _ c)      = arraysWritten c
 arraysWritten (While _ c)           = arraysWritten c
+arraysWritten (Switch _ cs) = concatMap aw cs
+  where aw (Case _ c)       = arraysWritten c
+        aw (DefaultCase c)  = arraysWritten c
 arraysWritten (DoWhile c _)      = arraysWritten c
 arraysWritten (For mi _ ms c)       =
     concatMap arraysWritten (initToList ++ stepToList ++ [c])
@@ -1062,6 +1159,8 @@ containsBreak (Seq c1 c2)      = containsBreak c1 || containsBreak c2
 --containsBreak (IfThenElse _ c1 c2) = containsBreak c1 || containsBreak c2
 containsBreak (While _ c)      = containsBreak c
 containsBreak (Block c)        = containsBreak c
+containsBreak (Switch _ cs) = any chk cs
+  where chk (Case _ c)      = containsBreak c
+        chk (DefaultCase c) = containsBreak c
 containsBreak (DoWhile c _)      = containsBreak c
 containsBreak _                = False
-
