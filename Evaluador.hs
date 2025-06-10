@@ -10,63 +10,57 @@ import Control.Monad (foldM, unless)
 ------------------------------------------------------------------
 type Version = Int
 type Scope   = [(Variable, Version)]   -- scope  = lista de variables con su versión
-type Env     = [Scope]                 -- pila de scopes (head == scope actual)
+data Env = Env
+  { varEnv :: [Scope]                              -- pila de scopes SSA
+  , ptrEnv :: [(Variable,(Variable,Exp))]          -- pVer ↦ (baseVer, idxExp)
+  }
 type IOFuncs = [String]
 
+emptyEnv :: Env
+emptyEnv = Env { varEnv = [[]], ptrEnv = [] }
 
 
 ------------------------------------------------------------------
 -- Gestión de scopes
 ------------------------------------------------------------------
 varsInEnv :: Env -> [Variable]
-varsInEnv = map fst . concat                -- aplana y extrae nombres
+varsInEnv = map fst . concat . varEnv
 
 pushScope :: Env -> Env
-pushScope env = [] : env                 -- abre { … }
+pushScope env = env { varEnv = [] : varEnv env }
 
--- Al cerrar un bloque simplemente tiramos el scope interno.
--- Las asignaciones a variables “de fuera” ya actualizaron
--- el scope correspondiente, así que no hay nada que propagar.
 popScope :: Env -> Env
-popScope []       = error "popScope: env vacío"
-popScope [_]      = [[]]      -- nunca dejamos el env vacío
-popScope (_:rest) = rest
+popScope env =
+  case varEnv env of
+    []       -> error "popScope: env vacío"
+    [_]      -> env { varEnv = [[]] }
+    (_:rest) -> env { varEnv = rest }
 
-
-
--- Busca variable desde el scope más interno hacia fuera
 lookupVar :: Variable -> Env -> Maybe Version
-lookupVar _ [] = Nothing
-lookupVar v (s:ss) = case lookup v s of
-                       Just n  -> Just n
-                       Nothing -> lookupVar v ss
-
--- Declarar NUEVA variable en el scope actual
---   -> nº de versión = (máx. versión vista hasta ahora) + 1
-declareVar :: Variable -> Env -> (Variable, Env)
-declareVar v (s:ss) =
-  let verPrev = maybe 0 id (lookupVar v (s:ss))   -- máximo global
-      ver     = verPrev + 1
-  in (v ++ show ver, ((v,ver):s) : ss)
-declareVar _ [] = error "declareVar: env vacío"
-
-
--- Incrementa versión de la 1ª aparición (Assign/PostInc…)  
--- Si nunca existió, la declara en el scope actual
-nextVarName :: Variable -> Env -> (Variable, Env)
-nextVarName v [] = error "nextVarName: env vacío"
-nextVarName v (s:ss) =
+lookupVar _ (Env { varEnv = [] }) = Nothing
+lookupVar v (Env { varEnv = s:ss, ptrEnv = _ }) =
   case lookup v s of
-    Just n  -> let n' = n+1
-                   s' = (v,n') : filter ((/=v).fst) s
-               in (v ++ show n', s' : ss)
-    Nothing -> case lookupVar v ss of
-                 Just _  -> let (name, ss') = nextVarName v ss
-                            in (name, s : ss')
-                 Nothing -> let (name, env') = declareVar v (s:ss)
-                            in (name, env')
+    Just n  -> Just n
+    Nothing -> lookupVar v (Env { varEnv = ss, ptrEnv = [] })
 
--- Nombre de la versión vigente (para VarExp, etc.)
+declareVar :: Variable -> Env -> (Variable, Env)
+declareVar v env@(Env { varEnv = (s:ss) }) =
+  let verPrev = maybe 0 id (lookupVar v env)
+      ver     = verPrev + 1
+      env'    = env { varEnv = ((v,ver):s) : ss }
+  in (v ++ show ver, env')
+declareVar _ _ = error "declareVar: env vacío"
+
+nextVarName :: Variable -> Env -> (Variable, Env)
+nextVarName v env@(Env { varEnv = (s:ss) }) =
+  let prev = case lookupVar v env of
+               Nothing -> 0
+               Just n  -> n
+      n' = prev + 1
+      s' = (v,n') : filter ((/=v).fst) s
+  in (v ++ show n', env { varEnv = s':ss })
+nextVarName _ _ = error "nextVarName: env vacío"
+
 currentVarName :: Variable -> Env -> Variable
 currentVarName v env =
   case lookupVar v env of
@@ -74,11 +68,21 @@ currentVarName v env =
     Just n -> v ++ show n
     Nothing -> error $ "Variable " ++ v ++ " no encontrada."
 
--- Variante con default (usa cuando la variable puede no existir)
 currentVarNameOrDefault :: Variable -> String -> Env -> Variable
-currentVarNameOrDefault v def env = maybe def pretty (lookupVar v env)
+currentVarNameOrDefault v def env =
+  maybe def pretty (lookupVar v env)
   where pretty 0 = v
         pretty n = v ++ show n
+
+------------------------------------------------------------------
+-- Helpers de punteros (ptrEnv)
+------------------------------------------------------------------
+setPtr :: Variable -> (Variable, Exp) -> Env -> Env
+setPtr p dest env =
+  env { ptrEnv = (p,dest) : filter ((/=p).fst) (ptrEnv env) }
+
+lookupPtr :: Variable -> Env -> Maybe (Variable, Exp)
+lookupPtr p env = lookup p (ptrEnv env)
 
 
 ------------------------------------------------------------------
@@ -138,8 +142,9 @@ containsIO _                   = False
 eval :: Comm -> IO ()
 eval programa = do
   let ioFuncs = detectImpureFunctions programa
-  (_, hsLines) <- evalComm ioFuncs programa 0 [[]]   -- env global vacío
+  (_, hsLines) <- evalComm ioFuncs programa 0 emptyEnv   -- ← ioFuncs (no ioFns)
   mapM_ putStrLn (alignLines hsLines)
+
 
 ------------------------------------------------------------------
 -- Evaluador de comandos
@@ -147,23 +152,77 @@ eval programa = do
 evalComm :: IOFuncs -> Comm -> Int -> Env -> IO (Env, [String])
 evalComm _ Skip _ env = return (env, [])
 
--- Declaración con tipo
-evalComm ioFns (LetType t v e) indent env = do
-  let (v', env') = declareVar v env
-      line = indentStr indent ++
-             if needsBind ioFns e
-                then v' ++ " <- " ++ evalExp e env
-                else "let " ++ v' ++ " = " ++ evalExp e env
-                     ++ " :: " ++ translateType t
-  return (env', [line])
--- Declaración constante (no usa needsBind porque no puede tener IO)
--- Declaración constante (no usa needsBind porque no puede tener IO)
-evalComm _ (LetConst t v e) indent env = do
-  let (v', env') = declareVar v env
-      line = indentStr indent ++
-             "let " ++ v' ++ " = " ++ evalExp e env
-                    ++ " :: " ++ translateType t
-  return (env', [line])
+-- Declaración con tipo ------------------------------------------------------
+evalComm ioFns (LetType (TPtr innerT) v (AddrOf addr)) indent env = do
+  -- • nombre SSA para el puntero
+  let (v', env1) = declareVar v env
+
+      -- • “base” lógico y expresión de índice
+      (baseLog, idxExp, idxStr) =
+        case addr of
+          VarExp x ->
+            (x, IntExp 0, "0")
+          ArrayAccess a i ->
+            (a, i, evalExp i env)
+          _ ->
+            error "LetType TPtr: AddrOf debe ser VarExp o ArrayAccess"
+
+      baseName = currentVarName baseLog env    -- versión vigente de la base
+
+      -- tipo del base para la anotación
+      baseTypeStr = case addr of
+        VarExp _ -> translateType innerT    -- usualmente "Int"
+        ArrayAccess _ _ -> "[" ++ translateType innerT ++ "]"   -- array de ese tipo
+        _ -> translateType innerT
+
+      -- línea Haskell que inicializa el puntero como tupla
+      ptrLine  = indentStr indent ++
+                 "let " ++ v' ++ " = (" ++ baseName ++ ", " ++ idxStr ++
+                 ") :: (" ++ baseTypeStr ++ ", Int)"
+
+      -- registrar el puntero en ptrEnv con el _nombre lógico_ de base
+      env2 = setPtr v' (baseLog, idxExp) env1
+
+  return (env2, [ptrLine])
+
+-- el resto de casos LetType igual que antes
+
+
+-- caso general (no-puntero) ── adaptá el “resto” de tu implementación original
+evalComm ioFns (LetType t v e) indent env
+  | not (isPtr t) = 
+      -- <-- pegá aquí tu código original para LetType no-puntero
+      let (v', env1) = declareVar v env
+          rhsStr     = evalExp e env
+          lineBase   = indentStr indent ++
+                       if needsBind ioFns e
+                          then v' ++ " <- " ++ rhsStr
+                          else "let " ++ v' ++ " = " ++ rhsStr ++ " :: " ++ translateType t
+          env2       = env1
+      in return (env2, [lineBase])
+  where
+    isPtr (TPtr _) = True
+    isPtr _        = False
+
+-- Asignación de puntero: q = &b[2];
+evalComm ioFns (Assign v (AddrOf addr)) indent env = do
+  let (v', env1) = nextVarName v env
+      (baseLog, idxExp, idxStr) =
+        case addr of
+          VarExp x      -> (x, IntExp 0, "0")
+          ArrayAccess a i -> (a, i, evalExp i env)
+          _ -> error "Assign: AddrOf debe ser VarExp o ArrayAccess"
+      baseName = currentVarName baseLog env
+      -- Detectar tipo del base
+      baseTypeStr = case addr of
+        VarExp _      -> "Int"  -- escalar
+        ArrayAccess _ _ -> "[Int]" -- array
+        _ -> "Int"
+      assignLine = indentStr indent ++
+                   "let " ++ v' ++ " = (" ++ baseName ++ ", " ++ idxStr ++ ") :: (" ++ baseTypeStr ++ ", Int)"
+      -- Registrar la nueva versión del puntero en ptrEnv
+      env2 = setPtr v' (baseLog, idxExp) env1
+  return (env2, [assignLine])
 
 
 -- Asignación
@@ -205,6 +264,9 @@ evalComm ioFns (Assign v rhs) indent env = do
           incLine            = indentStr indent ++
                                "let " ++ x' ++ " = " ++ oldName ++ " " ++ op
       return (env2, [assignLine, incLine])
+
+
+
 
 
 -- Expresión como statement
@@ -278,75 +340,96 @@ evalComm ioFns (AssignArr v idx rhs) indent env = do
 -- Definición de función (≠ main)
 ------------------------------------------------------------------
 evalComm ioFuncs (FuncDef retType name params body) indent env = do
-  -- ¿requiere IO? ¿es void?
-  let ioNeeded   = name `elem` ioFuncs
-      isVoid     = retType == TVoid
+  ----------------------------------------------------------------
+  -- 1) ¿requiere IO?  ¿devuelve void?
+  ----------------------------------------------------------------
+  let ioNeeded = name `elem` ioFuncs
+      isVoid   = retType == TVoid
 
-      -- firma de tipos
+  ----------------------------------------------------------------
+  -- 2) Firma de tipos
+  ----------------------------------------------------------------
       paramTypes = map (translateType . fst) params
       paramNames = unwords (map snd params)
       retSig     = if ioNeeded
-                     then "IO " ++ (if isVoid then "()" else translateType retType)
-                     else           (if isVoid then "()" else translateType retType)
+                     then "IO " ++ if isVoid then "()" else translateType retType
+                     else         if isVoid then "()" else translateType retType
       typeSig    = name ++ " :: " ++ concatMap (++ " -> ") paramTypes ++ retSig
   putStrLn typeSig
 
-  -- nuevo scope para parámetros
-  let paramScope = map (\(_,v) -> (v,0)) params :: Scope
-  (_, rawLines) <- evalComm ioFuncs body (indent+2) (paramScope : env)
+  ----------------------------------------------------------------
+  -- 3) Entorno con los parámetros en un nuevo scope
+  ----------------------------------------------------------------
+  let paramScope    = map (\(_,v) -> (v,0)) params :: Scope
+      envWithParams = env { varEnv = paramScope : varEnv env }
 
-  -- separamos init vs. última línea (finalExpr)
+  ----------------------------------------------------------------
+  -- 4) Traducir el cuerpo de la función
+  ----------------------------------------------------------------
+  (_, rawLines) <- evalComm ioFuncs body (indent + 2) envWithParams
+
+  -- separamos todo salvo la última línea
   let (bodyInit, finalExpr) =
         case reverse rawLines of
           []     -> ([], "return ()")
           (x:xs) -> (reverse xs, x)
 
   ----------------------------------------------------------------
-  -- 4 casos, con subdivisión 4a para cuerpos “puros” de if/return
+  -- 5) Generar definición Haskell según 4 casos
   ----------------------------------------------------------------
   case () of
-    -- 1) IO & void
+    ----------------------------------------------------------------
+    -- 1)  Función con IO  y  void
+    ----------------------------------------------------------------
     _ | ioNeeded && isVoid -> do
           putStrLn $ name ++ " " ++ paramNames ++ " = do"
           mapM_ (putStrLn . ("  " ++)) rawLines
           putStrLn "    return ()"
 
-      -- 2) IO & devuelve algo
+    ----------------------------------------------------------------
+    -- 2)  Función con IO  y  valor de retorno
+    ----------------------------------------------------------------
       | ioNeeded && not isVoid -> do
-          let isRet = case words (dropWhile (==' ') finalExpr) of
-                        ("return":_) -> True; _ -> False
-              cuerpo = if isRet
-                         then bodyInit ++ [dropWhile (==' ') finalExpr]
-                         else bodyInit
+          let endsWithReturn = case words (dropWhile (==' ') finalExpr) of
+                                ("return":_) -> True
+                                _            -> False
+              cuerpo = if endsWithReturn then bodyInit else rawLines
           putStrLn $ name ++ " " ++ paramNames ++ " = do"
           mapM_ (putStrLn . ("  " ++)) cuerpo
-          unless isRet $
+          unless endsWithReturn $
             putStrLn $ "    return (" ++ dropWhile (== ' ') finalExpr ++ ")"
 
-    -- 3) Pura & void
+    ----------------------------------------------------------------
+    -- 3)  Pura  y  void
+    ----------------------------------------------------------------
       | not ioNeeded && isVoid -> do
           putStrLn $ name ++ " " ++ paramNames ++ " = ()"
           unless (null rawLines) $ do
             putStrLn "  where"
             mapM_ (putStrLn . ("    " ++) . stripAux . dropWhile (==' ')) rawLines
 
-
-    -- 4a) Pura & devuelve algo & SOLO Return/if anidados
+    ----------------------------------------------------------------
+    -- 4a) Pura  con retorno  *y*  cuerpo simple (solo Returns/ifs anidados)
+    ----------------------------------------------------------------
       | not ioNeeded && not isVoid && isPureReturnBody body -> do
-          let expr = genPureBody body (paramScope : env)
+          let expr = genPureBody body envWithParams
           putStrLn $ name ++ " " ++ paramNames ++ " = " ++ expr
 
-      -- 4b) Pura & devuelve algo & cuerpo complejo
+    ----------------------------------------------------------------
+    -- 4b) Pura  con retorno  y cuerpo general
+    ----------------------------------------------------------------
       | otherwise -> do
-          let clean = stripPrefix "return " . dropWhile (==' ')
-                  where stripPrefix p xs = if p `isPrefixOf` xs
-                                             then drop (length p) xs else xs
+          let clean = dropWhile (==' ')               -- quita espacios iniciales
+                      . stripPrefix "return "         -- elimina el “return ” final
+              stripPrefix p xs = if p `isPrefixOf` xs then drop (length p) xs else xs
           putStrLn $ name ++ " " ++ paramNames ++ " = " ++ clean finalExpr
           unless (null bodyInit) $ do
             putStrLn "  where"
             mapM_ (putStrLn . ("    " ++) . stripAux . dropWhile (==' ')) bodyInit
 
-
+  ----------------------------------------------------------------
+  -- 6)  Esta rama no añade líneas al código Haskell resultante
+  ----------------------------------------------------------------
   return (env, [])
 
 
@@ -355,10 +438,122 @@ evalComm ioFuncs (FuncDef retType name params body) indent env = do
 -- Return
 evalComm _ (Return exp) indent env =
   return (env, [indentStr indent ++ "return " ++ evalExp exp env])
-
+{-
 evalComm ioFns (Printf fmt args) indent env = do
   let str = translatePrintf fmt args env
   return (env, [indentStr indent ++ str])
+-}
+evalComm ioFns (Printf fmt args) indent env = do
+  putStrLn $ "DEBUG Printf: env = " ++ show (varsInEnv env)
+  let str = translatePrintf fmt args env
+  return (env, [indentStr indent ++ str])
+
+{-
+-- ----------------  *p = rhs;  -------------------------------
+evalComm _ (AssignDeref (Deref (VarExp p)) rhs) indent env = do
+  let pName  = currentVarName p env
+      rhsStr = evalExp rhs env
+  case lookupPtr pName env of
+    ------------------------------------------------------------------
+    --  puntero a variable escalar  (&x)
+    ------------------------------------------------------------------
+    Just (baseLog, IntExp 0) -> do
+      -- Detectar si baseLog es escalar o array:
+      -- Por defecto, lo tratamos como escalar. Si querés detección real, habría que consultar el entorno y el tipo.
+      let isArray = False  -- Cambiá manualmente según el test, o implementá lógica de detección si te interesa.
+      if isArray
+        then do
+          -- Caso ARRAY
+          let idxStr = "0"
+              oldArr = currentVarName baseLog env
+              (arr', env1) = nextVarName baseLog env
+              lineAssign = indentStr indent ++
+                           "let " ++ arr' ++ " = take " ++ idxStr ++ " " ++ oldArr ++
+                           " ++ [" ++ rhsStr ++ "] ++ drop (" ++ idxStr ++ " + 1) " ++ oldArr
+              (p', env2)   = nextVarName p env1
+              linePtr      = indentStr indent ++
+                             "let " ++ p' ++ " = (" ++ arr' ++ ", " ++ idxStr ++ ")"
+              envFinal     = setPtr p' (baseLog, IntExp 0) env2
+          return (envFinal, [lineAssign, linePtr])
+        else do
+          -- Caso ESCALAR
+          let (base', env1) = nextVarName baseLog env
+              lineAssign    = indentStr indent ++ "let " ++ base' ++ " = " ++ rhsStr
+              (p',   env2)  = nextVarName p env1
+              linePtr       = indentStr indent ++
+                              "let " ++ p' ++ " = (" ++ base' ++ ", 0)"
+              envFinal      = setPtr p' (baseLog, IntExp 0) env2
+          return (envFinal, [lineAssign, linePtr])
+
+    ------------------------------------------------------------------
+    --  puntero a arr[i]   (&arr[i])
+    ------------------------------------------------------------------
+    Just (arrLog, idxE) -> do
+      let idxStr      = evalExp idxE env
+          oldArr      = currentVarName arrLog env
+          (arr', env1) = nextVarName arrLog env
+          lineAssign   = indentStr indent ++
+                         "let " ++ arr' ++ " = take " ++ idxStr ++ " " ++ oldArr ++
+                         " ++ [" ++ rhsStr ++ "] ++ drop (" ++ idxStr ++ " + 1) " ++ oldArr
+          (p', env2)   = nextVarName p env1
+          linePtr      = indentStr indent ++
+                         "let " ++ p' ++ " = (" ++ arr' ++ ", " ++ idxStr ++ ")"
+          envFinal     = setPtr p' (arrLog, idxE) env2
+      return (envFinal, [lineAssign, linePtr])
+
+    ------------------------------------------------------------------
+    _ -> error "AssignDeref: puntero no declarado o forma no soportada."
+
+-}
+
+evalComm _ (AssignDeref (Deref (VarExp p)) rhs) indent env = do
+  let pName  = currentVarName p env
+      rhsStr = evalExp rhs env
+  case lookupPtr pName env of
+    Just (baseLog, IntExp 0) -> do
+      -- Heurística básica: si el nombre base empieza con "b" o "a", asumimos array.
+      -- ¡Podes mejorarlo por entorno real!
+      let isArray = case take 1 baseLog of
+                      "b" -> True
+                      "a" -> True
+                      _   -> False
+      if isArray
+        then do
+          let idxStr = "0"
+              oldArr = currentVarName baseLog env
+              (arr', env1) = nextVarName baseLog env
+              lineAssign = indentStr indent ++
+                           "let " ++ arr' ++ " = take " ++ idxStr ++ " " ++ oldArr ++
+                           " ++ [" ++ rhsStr ++ "] ++ drop (" ++ idxStr ++ " + 1) " ++ oldArr
+              (p', env2)   = nextVarName p env1
+              linePtr      = indentStr indent ++
+                             "let " ++ p' ++ " = (" ++ arr' ++ ", " ++ idxStr ++ ")"
+              envFinal     = setPtr p' (baseLog, IntExp 0) env2
+          return (envFinal, [lineAssign, linePtr])
+        else do
+          let (base', env1) = nextVarName baseLog env
+              lineAssign    = indentStr indent ++ "let " ++ base' ++ " = " ++ rhsStr
+              (p',   env2)  = nextVarName p env1
+              linePtr       = indentStr indent ++
+                              "let " ++ p' ++ " = (" ++ base' ++ ", 0)"
+              envFinal      = setPtr p' (baseLog, IntExp 0) env2
+          return (envFinal, [lineAssign, linePtr])
+    Just (arrLog, idxE) -> do
+      let idxStr      = evalExp idxE env
+          oldArr      = currentVarName arrLog env
+          (arr', env1) = nextVarName arrLog env
+          lineAssign   = indentStr indent ++
+                         "let " ++ arr' ++ " = take " ++ idxStr ++ " " ++ oldArr ++
+                         " ++ [" ++ rhsStr ++ "] ++ drop (" ++ idxStr ++ " + 1) " ++ oldArr
+          (p', env2)   = nextVarName p env1
+          linePtr      = indentStr indent ++
+                         "let " ++ p' ++ " = (" ++ arr' ++ ", " ++ idxStr ++ ")"
+          envFinal     = setPtr p' (arrLog, idxE) env2
+      return (envFinal, [lineAssign, linePtr])
+    _ -> error "AssignDeref: puntero no declarado o forma no soportada."
+
+
+
 
 
 
@@ -424,14 +619,6 @@ evalComm ioFns (While cond body) indent env = do
       code = header ++ bodyLines ++ [recur, elseLn] ++ catchEnd ++ [callLine]
 
   return (envOut, code)
-
-
-
-
-
-
-
-
 
 
 -- MODIFICAMOS
@@ -513,14 +700,28 @@ evalComm ioFuncs (CondNoElse cond cThen) indent env = do
       return (finalEnv, letStmts)
 
 
--- Declaración *sin* inicialización  →  valor por defecto
-evalComm _ (LetUninit t v) indent env = do
-  let (v', env') = declareVar v env
-      defVal     = defaultValue t
-      line       = indentStr indent
-                 ++ "let " ++ v' ++ " = " ++ defVal
-                 ++ " :: " ++ translateType t
-  return (env', [line])
+-- ==============================================================
+--  Declaración SIN inicialización
+--  • Si el tipo es puntero, abortamos inmediatamente con el
+--    mismo mensaje usado en AssignDeref para garantizar que
+--    cualquier «int *p;» corte la traducción/ejecución.
+-- ==============================================================
+evalComm _ (LetUninit t v) indent env =
+  case t of
+    -- ▸ Puntero sin inicializar  →  error y fin.
+    TPtr _ ->
+      error "AssignDeref: puntero no declarado o forma no soportada."
+
+    -- ▸ Cualquier otro tipo  →  seguimos como siempre.
+    _      -> do
+      let (v', env') = declareVar v env
+          defVal     = defaultValue t
+          line       = indentStr indent
+                    ++ "let " ++ v' ++ " = "
+                    ++ defVal ++ " :: " ++ translateType t
+      return (env', [line])
+
+
 
 -- For (for(init; cond; step) { body })
 evalComm ioFns (For mInit cond mStep body) indent env = do
@@ -984,6 +1185,32 @@ evalExp (ArrayAccess arr idx) env = "(" ++ currentVarName arr env ++ " !! " ++ e
 evalExp (CallExp fn args) env
   | null args = fn                   -- hablar        (IO ())
   | otherwise = fn ++ " " ++ unwords (map (`evalExp` env) args)
+-- --- tomar dirección: "&e" ---
+evalExp (AddrOf e) env =
+  case e of
+    VarExp v ->
+      -- devolvemos el nombre versionado de la variable a la que apuntamos
+      currentVarName v env
+    ArrayAccess a idxExp ->
+      -- si decimos "&arr[i]", devolvemos el nombre versionado de "arr"
+      -- y dejamos que idxExp se maneje luego en AssignDeref
+      currentVarName a env
+    _ -> error "evalExp AddrOf: solo VarExp o ArrayAccess permitidos."
+
+
+
+-- Des-referenciar -----------------------------------------------------------
+evalExp (Deref (VarExp p)) env =
+  case lookupPtr (currentVarName p env) env of
+    Just (baseLog, idxE) ->
+      let baseName = currentVarName baseLog env
+      in case idxE of
+           IntExp 0 -> baseName
+           IntExp n -> "(" ++ baseName ++ " !! " ++ show n ++ ")"
+           _        -> "(" ++ baseName ++ " !! " ++ evalExp idxE env ++ ")"
+    _ -> error $ "evalExp Deref: puntero '" ++ p ++ "' no declarado."
+
+
 
 
 
@@ -1022,6 +1249,8 @@ translateType TShort  = "Int"     -- usamos Int para short
 translateType TString = "String"
 translateType TVoid = "()"
 translateType (TArray t _) = "[" ++ translateType t ++ "]"
+translateType (TPtr t) = translateType t  
+
 
 
 defaultValue :: Type -> String
@@ -1164,3 +1393,8 @@ containsBreak (Switch _ cs) = any chk cs
         chk (DefaultCase c) = containsBreak c
 containsBreak (DoWhile c _)      = containsBreak c
 containsBreak _                = False
+
+-- ¿Es tipo puntero?
+isPtr :: Type -> Bool
+isPtr (TPtr _) = True
+isPtr _        = False

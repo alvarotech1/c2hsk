@@ -54,6 +54,8 @@ parseFactor =
   <|> try parsePreDecr
   <|> try parsePostIncr
   <|> try parsePostDecr
+  <|> try parseAddrOf
+  <|> try parseDeref
   <|> try parseFuncCallFactor
   <|> try parseNeg
   <|> try (parens lis intexp)
@@ -62,6 +64,21 @@ parseFactor =
   <|> try parseChar
   <|> try parseString
   <|> (VarExp <$> identifier lis)
+
+-- &e   (tomar dirección)
+parseAddrOf :: Parser Exp
+parseAddrOf = do
+  reservedOp lis "&"
+  e <- parseFactor
+  return (AddrOf e)
+
+-- *e   (desreferenciar)
+parseDeref :: Parser Exp
+parseDeref = do
+  reservedOp lis "*"
+  e <- parseFactor
+  return (Deref e)
+
 
 -- pre-incremento (++x)
 parsePreIncr :: Parser Exp
@@ -222,6 +239,7 @@ commSemicolon = do
 commNeedsSemicolon :: Parser Comm
 commNeedsSemicolon =
       try parseAssign
+  <|> try parseAssignDeref  
   <|> try parseExprStmt
   <|> try parsePrintf
   <|> try parseScanf
@@ -453,21 +471,35 @@ parseVarDecl = try $ do
 parseVarDecl :: Parser Comm
 parseVarDecl = try $ do
     isConst <- optionMaybe (reserved lis "const")    -- ¿lleva const?
-    t       <- typeParser
+    t0      <- typeParser
+    ptrs    <- many (reservedOp lis "*")             -- lee cero o más “*”
+    let t = foldl (\acc _ -> TPtr acc) t0 ptrs       -- construye TPtr anidado
+
     decls   <- commaSep1 lis $ do
         name  <- identifier lis
-        mSize <- optionMaybe           -- ← soporta  a[10]
-                 (brackets lis (fromInteger <$> integer lis))
-        notFollowedBy (parens lis (commaSep lis parseParam)) -- no confundir con prototipo
-        mInit <- optionMaybe (reservedOp lis "=" >> intexp)  -- inicializador opcional
+        mSize <- optionMaybe (brackets lis (fromInteger <$> integer lis))
+        notFollowedBy (parens lis (commaSep lis parseParam))
+        mInit <- optionMaybe (reservedOp lis "=" >> intexp)
         let realType = maybe t (\n -> TArray t n) mSize
         return (realType, name, mInit)
 
-    let mkLet (ty,v,me) = case isConst of
+    let mkLet (ty, v, me) = case isConst of
             Just _  -> LetConst ty v (maybe (defaultInit ty) id me)
-            Nothing -> LetType  ty v (maybe (defaultInit ty) id me)
+            Nothing -> case me of
+                Just val -> LetType ty v val
+                Nothing  -> LetUninit ty v
 
     return (foldr1 Seq (map mkLet decls))
+
+
+-- *e = e
+parseAssignDeref :: Parser Comm
+parseAssignDeref = do
+  reservedOp lis "*"
+  lhsExp <- parseFactor
+  reservedOp lis "="
+  rhsExp <- try (BoolAsIntExp <$> boolexp) <|> intexp
+  return (AssignDeref (Deref lhsExp) rhsExp)
 
 
 -- identificador '[' exp ']'
@@ -502,6 +534,7 @@ defaultInit (TArray t n) = CallExp "replicate"
     [ IntExp (fromIntegral n)
     , defaultInit t
     ]
+defaultInit (TPtr _) = error "defaultInit: no existe valor por defecto para punteros"
 
 
 

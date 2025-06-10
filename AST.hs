@@ -15,8 +15,8 @@ data Type
     | TString
     | TVoid
     | TArray Type Int
+    | TPtr Type       -- puntero a un tipo dado
     deriving (Show, Eq)
-
 
 -- Expresiones (sólo aritméticas)
 data Exp 
@@ -37,6 +37,8 @@ data Exp
     | PostDecr Variable     --  x++
     | PreIncr Variable      -- ++x
     | PreDecr Variable      -- --x
+    | AddrOf Exp        -- &e    (tomar dirección)
+    | Deref  Exp        -- *e    (desreferenciar)
     | ArrayAccess Variable Exp -- arr[i]
     deriving (Show, Eq)
 
@@ -78,6 +80,7 @@ data Comm
     | For (Maybe Comm) BoolExp (Maybe Comm) Comm   -- init; cond; step { body }
     | AssignArr Variable Exp Exp  -- arr[i] = e;
     | Switch Exp [Case]         -- switch (e) { … }
+    | AssignDeref Exp Exp   -- *p = e;
     deriving (Show, Eq)
 
 data Case
