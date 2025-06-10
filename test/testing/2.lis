@@ -1,0 +1,12 @@
+// 2. Puntero a array (posición específica)
+int main() {
+    int a[3];
+	a[0] = 0;
+	a[1] = 0;
+	a[2] = 0;
+    int *p = &a[1];
+    *p = 99;
+    printf("%d %d %d\n", a[0], a[1], a[2]);
+    return 0;
+}
+// Esperado: 0 99 0

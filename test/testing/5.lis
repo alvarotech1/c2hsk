@@ -1,0 +1,12 @@
+// 5. Múltiples punteros al mismo lugar
+int main() {
+    int a[2];
+	a[0] = 7;
+	a[1] = 8;
+    int *p = &a[1];
+    int *q = &a[1];
+    *p = 66;
+    printf("%d %d\n", *p, *q);
+    return 0;
+}
+// Esperado: 66 66

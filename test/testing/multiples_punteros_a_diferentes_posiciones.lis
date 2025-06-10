@@ -1,0 +1,12 @@
+int main() {
+    int a[3];
+    a[0] = 5;
+    a[1] = 6;
+    a[2] = 7;
+    int *p1 = &a[0];
+    int *p2 = &a[2];
+    *p1 = 10;
+    *p2 = 20;
+    printf("%d %d %d\n", a[0], a[1], a[2]);
+    return 0;
+}

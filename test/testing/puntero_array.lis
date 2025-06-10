@@ -1,0 +1,7 @@
+int main() {
+    int a[5];
+    int *p = &a[2];    // p apunta al elemento 2 del array (índice 2)
+    *p = 99;           // modifica a[2]
+    printf("%d\n", a[2]);
+    return 0;
+}

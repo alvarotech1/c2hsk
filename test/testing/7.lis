@@ -1,0 +1,14 @@
+// 7. Asignar y leer varios offsets del array
+int main() {
+    int a[3];
+	a[0] = 1;
+	a[1] = 2;
+	a[2] = 3;
+    int *p = &a[0];
+    *p = 11;
+    p = &a[2];
+    *p = 33;
+    printf("%d %d %d\n", a[0], a[1], a[2]);
+    return 0;
+}
+// Esperado: 11 2 33

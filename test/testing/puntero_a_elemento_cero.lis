@@ -1,0 +1,10 @@
+int main() {
+    int a[3] = {7, 8, 9};
+    int *p = &a[0];
+    *p = 42;
+    printf("%d %d %d\n", a[0], a[1], a[2]);
+    printf("%d\n", *p);
+    return 0;
+}
+// Esperado: 42 8 9
+//           42

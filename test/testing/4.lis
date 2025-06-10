@@ -1,0 +1,8 @@
+// 4. Leer por puntero, no modificar
+int main() {
+    int z = 44;
+    int *p = &z;
+    printf("%d\n", *p);
+    return 0;
+}
+// Esperado: 44

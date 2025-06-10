@@ -1,0 +1,16 @@
+// 8. Múltiples punteros y asignaciones directas
+int main() {
+    int b[3];
+	b[0] = 0;
+	b[1] = 0;
+	b[2] = 0;
+    int *p0 = &b[0];
+    int *p1 = &b[1];
+    int *p2 = &b[2];
+    *p0 = 1;
+    *p1 = 2;
+    *p2 = 3;
+    printf("%d %d %d\n", b[0], b[1], b[2]);
+    return 0;
+}
+// Esperado: 1 2 3

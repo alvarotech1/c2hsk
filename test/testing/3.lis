@@ -1,0 +1,15 @@
+// 3. Reasignar el puntero a diferentes offsets
+int main() {
+    int b[4];
+b[0] = 1;
+b[1] = 2;
+b[2] = 3;
+b[3] = 4;
+    int *q = &b[0];
+    *q = 10;        // b[0] = 10
+    q = &b[2];
+    *q = 30;        // b[2] = 30
+    printf("%d %d %d %d\n", b[0], b[1], b[2], b[3]);
+    return 0;
+}
+// Esperado: 10 2 30 4

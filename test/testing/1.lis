@@ -1,0 +1,9 @@
+// 1. Puntero a escalar
+int main() {
+    int x = 5;
+    int *p = &x;
+    *p = 11;
+    printf("%d %d\n", x, *p);
+    return 0;
+}
+// Esperado: 11 11

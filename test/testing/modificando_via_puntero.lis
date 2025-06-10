@@ -1,0 +1,10 @@
+int main() {
+    int a[2];
+	a[0] = 100;
+	a[1] = 200;
+    int *p = &a[1];
+    printf("%d\n", *p); // imprime 200
+    *p = 123;
+    printf("%d\n", a[1]); // imprime 123
+    return 0;
+}
