@@ -19,8 +19,8 @@ lis = makeTokenParser (emptyDef
     , commentEnd      = "*/"
     , commentLine     = "//"
     , reservedNames   = ["true","false","skip","if","then","else","end",
-                         "while","do","return","printf", "void","for", "const","break","scanf","switch","case","default"]
-    , reservedOpNames = [ "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "!", "=", ";", "{", "}", ",", "(", ")",":" ]
+                         "while","do","return","printf", "void","for", "const","break","scanf","switch","case","default", "sqrt", "pow", "log2"]
+    , reservedOpNames = ["+=", "-=", "*=", "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "&" ,"!", "=", ";", "{", "}", ",", "(", ")",":" ]
     }
   )
 
@@ -63,6 +63,10 @@ parseFactor =
   <|> try parseInt
   <|> try parseChar
   <|> try parseString
+  <|> try sqrtExp
+  <|> try powExp
+  <|> try log2Exp
+
   <|> (VarExp <$> identifier lis)
 
 -- &e   (tomar dirección)
@@ -107,6 +111,30 @@ parsePostDecr = do
     var <- identifier lis
     reservedOp lis "--"
     return (PostDecr var)
+
+-- raiz cuadrada
+sqrtExp :: Parser Exp
+sqrtExp = do 
+     reserved lis "sqrt"
+     exp <- intexp
+     return (Sqrt exp)
+
+-- potencia
+powExp :: Parser Exp
+powExp = do
+    reserved lis "pow"
+    parens lis $ do  -- el $ te sirve para asegurar que las instrucciones desp del 'do' solo seran ejecutadas si la entrada empieza con 'parens' de 'lis' osea parentesis
+        base <- intexp
+        comma lis
+        exp <- intexp 
+        return (Pow base exp)
+
+-- logaritmo en base 2
+log2Exp :: Parser Exp
+log2Exp = do
+    reserved lis "log2"
+    exp <- intexp        
+    return (Log2 exp)
 
 parseNeg :: Parser Exp
 parseNeg = do
@@ -379,6 +407,7 @@ commBlock = do
     body <- braces lis (comm <|> return Skip)
     return (Block body)
 
+{-  este no permite if () else if ()
 -- Parser para if con else (C style)
 parseIfElse :: Parser Comm
 parseIfElse = do
@@ -386,7 +415,21 @@ parseIfElse = do
     cond <- parens lis boolexp
     ifBlock <- commBlock
     reserved lis "else"
-    elseBlock <- commBlock
+    elseBlock <- comm --riesgo, a rezar que no entre en otro que no sea Block porq podria generar problemas de scope.
+    return (Cond cond ifBlock elseBlock)
+-}
+
+-- un “statement” es o bien uno de los que llevan ';', o uno sin ';' (incluyendo blocks, if, while…)
+singleStmt :: Parser Comm
+singleStmt = try commSemicolon <|> commNoSemicolon
+
+parseIfElse :: Parser Comm
+parseIfElse = do
+    reserved lis "if"
+    cond      <- parens lis boolexp
+    ifBlock   <- commBlock
+    reserved lis "else"
+    elseBlock <- singleStmt     -- sólo un statement, no varios
     return (Cond cond ifBlock elseBlock)
 
 -- Parser para if sin else (C style)
@@ -401,8 +444,8 @@ parseIfOnly = do
 parseReturn :: Parser Comm
 parseReturn = do
     reserved lis "return"
-    e <- intexp
-    return (Return e)
+    me <- optionMaybe intexp
+    return $ maybe ReturnVoid Return me
 
 parsePrintf :: Parser Comm
 parsePrintf = do
@@ -425,21 +468,43 @@ parseScanf = do
     args <- parens lis parseScanfArgs
     return (Scanf (fst args) (snd args))
   where
-    parseScanfArgs :: Parser (String, [Variable])
+    parseScanfArgs :: Parser (String, [Exp])
     parseScanfArgs = do
-        s <- stringLiteral lis
-        vars <- many (do
-            reservedOp lis ","
-            identifier lis)
-        return (s, vars)
+        fmt <- stringLiteral lis             -- "%d %d"
+        reservedOp lis ","                   -- ← coma obligatoria
+        vars <- commaSep1 lis parseLValue    -- al menos un l-value
+        return (fmt, vars)
+
+    -- Solo acepta variable simple o acceso a array (arr[i])
+{-
+parseLValue :: Parser Exp
+parseLValue = do
+    _ <- optionMaybe (reservedOp lis "&")
+    try parseArrayAccess
+    <|> (VarExp <$> identifier lis)
+-}
+parseLValue :: Parser Exp
+parseLValue = do
+  _    <- optionMaybe (reservedOp lis "&")   -- &  (ignoramos el resultado)
+  name <- identifier lis                     -- siempre hay un identificador
+  mIdx <- optionMaybe (brackets lis intexp)  -- ¿viene  “[expr]”  ?
+  return $ case mIdx of
+             Just idx -> ArrayAccess name idx
+             Nothing  -> VarExp name
+
 
 parseAssign :: Parser Comm
 parseAssign = do
     var <- identifier lis
-    reservedOp lis "="
-    -- Primero intenta boolexp, si falla, usa intexp
-    e <- try (BoolAsIntExp <$> boolexp) <|> intexp
-    return (Assign var e)
+    opFn <- choice
+      [ try $ reservedOp lis "+=" >> return (\rhs -> AddExp (VarExp var) rhs)
+      , try $ reservedOp lis "-=" >> return (\rhs -> SubExp (VarExp var) rhs)
+      , try $ reservedOp lis "*=" >> return (\rhs -> MulExp (VarExp var) rhs)
+      ,        reservedOp lis "="  >> return id              -- caso normal
+      ]
+    rhs <- try (BoolAsIntExp <$> boolexp) <|> intexp
+    return (Assign var (opFn rhs))
+
 
 parseFuncCall :: Parser Exp
 parseFuncCall = do
@@ -479,7 +544,7 @@ parseVarDecl = try $ do
         name  <- identifier lis
         mSize <- optionMaybe (brackets lis (fromInteger <$> integer lis))
         notFollowedBy (parens lis (commaSep lis parseParam))
-        mInit <- optionMaybe (reservedOp lis "=" >> intexp)
+        mInit <- optionMaybe parseInitializer
         let realType = maybe t (\n -> TArray t n) mSize
         return (realType, name, mInit)
 
@@ -490,6 +555,18 @@ parseVarDecl = try $ do
                 Nothing  -> LetUninit ty v
 
     return (foldr1 Seq (map mkLet decls))
+
+-- { 1 , 2 , 3 }
+parseInitializer :: Parser Exp
+parseInitializer =
+      try (reservedOp lis "=" >> intexp)                 -- viejo caso escalar
+  <|> try (reservedOp lis "=" >> braces lis initList)    -- NUEVO
+
+initList :: Parser Exp
+initList = do
+  xs <- commaSep lis intexp
+  return (InitList xs)
+
 
 
 -- *e = e
@@ -552,12 +629,22 @@ parseFuncDef = do
     reservedOp lis "}"
     return (FuncDef retType funcName params body)
 
-
+{-
 parseParam :: Parser (Type, Variable)
 parseParam = do
     t  <- typeParser
     nm <- identifier lis
     return (t, nm)
+-}
+
+parseParam :: Parser (Type, Variable)
+parseParam = do
+    t  <- typeParser
+    nm <- identifier lis
+    mArr <- optionMaybe (brackets lis (return ()))  -- detecta []
+    case mArr of
+      Just _  -> return (TArray t 0, nm)   -- 0 marca "sin tamaño"
+      Nothing -> return (t, nm)
 
 
 typeParser :: Parser Type

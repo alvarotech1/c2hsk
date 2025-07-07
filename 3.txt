@@ -1,0 +1,27 @@
+int main() {
+    int input;
+    printf("Ingrese un valor (0, 1 o cualquier otro): ");
+    scanf("%d", &input);
+    
+	switch (input) {
+        case 0: {
+            printf("Retornando sin valor\n");
+	    return 0;
+            
+        }
+        case 1: {
+		printf("case 1");
+            printf("Caso 1\n");
+		printf("pablo switch");
+            break;
+		
+        }
+        default: {
+            printf("Caso default\n");
+            break;
+        }
+    }
+
+printf("pablo FUERA DEL switch");
+    return 0;
+}

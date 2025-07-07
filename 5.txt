@@ -1,0 +1,32 @@
+int main()
+{
+
+printf("juan");
+
+return 0;
+
+int variable = 0;
+
+variable = funcion();
+
+
+printf("%d",variable);
+
+
+
+}
+
+
+int funcion(){
+
+printf("hola");
+
+int retorno = 0;
+
+retorno = 5;
+
+return 0;
+
+printf("DESPUÉS DEL RETURN EN LA FUNCIÓN");
+
+}

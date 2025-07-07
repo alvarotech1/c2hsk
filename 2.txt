@@ -1,0 +1,33 @@
+int funcionConSwitchReturn(int codigo) {
+    switch (codigo) {
+        case 0: {
+            printf("Retornando sin valor\n");
+	    return 0;
+            break;
+        }
+        case 1: {
+		printf("pablo switch");
+            printf("Caso 1\n");
+		printf("pablo switch");
+            break;
+		
+        }
+        default: {
+            printf("Caso default\n");
+            break;
+        }
+    }
+
+    printf("pablo");
+    return 0;
+
+	
+}
+
+int main() {
+    int input;
+    printf("Ingrese un valor (0, 1 o cualquier otro): ");
+    scanf("%d", &input);
+    funcionConSwitchReturn(input);
+    return 0;
+}

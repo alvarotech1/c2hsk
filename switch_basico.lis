@@ -1,0 +1,22 @@
+
+int main() {
+    int x = 2;      // valor a seleccionar */
+    int y = 0;      // resultado */
+
+    switch (x) {
+        case 0:
+            y = 100;
+            break;
+
+        case 2:
+            y = 200;
+            break;
+
+        default:
+            y = -1;
+    }
+
+    // debería imprimir 200 */
+    printf("%d\n", y);
+    return 0;
+}

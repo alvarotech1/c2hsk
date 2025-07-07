@@ -1,0 +1,26 @@
+
+
+void funcionConSwitchBreak(int valor) {
+    switch (valor) {
+        case 1: {
+            printf("Caso 1\n");
+            break;
+        }
+        case 2: {
+            printf("Caso 2\n");
+            break;
+        }
+        default: {
+            printf("Caso default\n");
+            break;
+        }
+    }
+}
+
+int main() {
+    int input;
+    printf("Ingrese un valor (1 o 2): ");
+    scanf("%d", &input);
+    funcionConSwitchBreak(input);
+    return 0;
+}

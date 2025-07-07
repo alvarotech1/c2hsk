@@ -24,13 +24,17 @@ data Exp
     | FloatExp Double
     | StringExp String
     | CharExp Char
+    | InitList [Exp]     
     | UMinus Exp
     | VarExp Variable
     | AddExp Exp Exp
     | SubExp Exp Exp
     | MulExp Exp Exp
     | DivExp Exp Exp
-    | ModExp Exp Exp  
+    | ModExp Exp Exp
+    | Sqrt Exp             
+    | Pow Exp Exp              
+    | Log2 Exp
     | CallExp Variable [Exp]  -- llamada a función con argumentos aritméticos
     | BoolAsIntExp BoolExp 
     | PostIncr Variable     --  x++
@@ -66,13 +70,14 @@ data Comm
     | Assign  Variable Exp
     | Seq Comm Comm
     | Cond BoolExp Comm Comm   -- if cond then c1 else c2
-    | CondNoElse BoolExp Comm
+    -- CondNoElse BoolExp Comm
     | Repeat Comm BoolExp      -- repeat c until cond
     | Break  
     | FuncDef Type Variable [(Type, Variable)] Comm
-    | Return Exp
+    | Return Exp  -- return e;
+    | ReturnVoid  -- return; (solo en funciones void)
     | Printf String [Exp]
-    | Scanf String [Variable]
+    | Scanf String [Exp]
     | While BoolExp Comm
     | DoWhile Comm BoolExp --  do { body } while (cond);
     | ExprStmt Exp   -- permite ejecutar expresiones como comandos, ej. var++
