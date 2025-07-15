@@ -1,33 +1,12 @@
-int funcionConSwitchReturn(int codigo) {
-    switch (codigo) {
-        case 0: {
-            printf("Retornando sin valor\n");
-	    return 0;
-            break;
-        }
-        case 1: {
-		printf("pablo switch");
-            printf("Caso 1\n");
-		printf("pablo switch");
-            break;
-		
-        }
-        default: {
-            printf("Caso default\n");
-            break;
-        }
-    }
-
-    printf("pablo");
-    return 0;
-
-	
+void swap(int *a, int *b) {
+    int tmp = *a;
+    *a = *b;
+    *b = tmp;
 }
 
 int main() {
-    int input;
-    printf("Ingrese un valor (0, 1 o cualquier otro): ");
-    scanf("%d", &input);
-    funcionConSwitchReturn(input);
+    int x = 3, y = 7;
+    swap(&x, &y);
+    printf("%d %d\n", x, y); // Debe imprimir 7 3
     return 0;
 }

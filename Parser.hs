@@ -27,6 +27,7 @@ lis = makeTokenParser (emptyDef
 
 program :: Parser Comm
 program = do
+  many (try includeLine) -- ignora los #include del principio
   cs <- many comm 
   return (foldr Seq Skip cs)
 
@@ -79,7 +80,7 @@ parseAddrOf = do
 -- *e   (desreferenciar)
 parseDeref :: Parser Exp
 parseDeref = do
-  reservedOp lis "*"
+  ptrStar
   e <- parseFactor
   return (Deref e)
 
@@ -169,6 +170,14 @@ parseString = do
     s <- stringLiteral lis
     return (StringExp s)
 
+-- Parser para ignorar solo líneas que comienzan con '#include'
+includeLine :: Parser ()
+includeLine = do
+    _ <- try (char '#' >> string "include") -- reconoce #include
+    _ <- many (noneOf "\n\r") -- consume todo lo que viene hasta el \n
+    _ <- optional (oneOf "\n\r") -- consume salto de linea si hay
+    whiteSpace lis    -- <-- consume espacios o lineas vacias
+    return ()
 
 boolexp :: Parser BoolExp
 boolexp = parseOr
@@ -253,6 +262,7 @@ comm2 =
 
 comm :: Parser Comm
 comm = do
+  many (try includeLine)
   cs <- many1 (try commSemicolon <|> commNoSemicolon)
   return (foldr Seq Skip cs)
 
@@ -537,7 +547,7 @@ parseVarDecl :: Parser Comm
 parseVarDecl = try $ do
     isConst <- optionMaybe (reserved lis "const")    -- ¿lleva const?
     t0      <- typeParser
-    ptrs    <- many (reservedOp lis "*")             -- lee cero o más “*”
+    ptrs <- many ptrStar              -- lee cero o más “*”
     let t = foldl (\acc _ -> TPtr acc) t0 ptrs       -- construye TPtr anidado
 
     decls   <- commaSep1 lis $ do
@@ -572,7 +582,7 @@ initList = do
 -- *e = e
 parseAssignDeref :: Parser Comm
 parseAssignDeref = do
-  reservedOp lis "*"
+  ptrStar
   lhsExp <- parseFactor
   reservedOp lis "="
   rhsExp <- try (BoolAsIntExp <$> boolexp) <|> intexp
@@ -636,16 +646,33 @@ parseParam = do
     nm <- identifier lis
     return (t, nm)
 -}
+{-
+-- Parser.hs  · parseParam
+parseParam :: Parser (Type, Variable)
+parseParam = do
+    t0   <- typeParser                   -- int / float / …
+    ptrs <- many (reservedOp lis "*")    -- cero o más ‘*’
+    let t = foldl (\acc _ -> TPtr acc) t0 ptrs   -- int **p → TPtr (TPtr TInt)
+    nm   <- identifier lis
+    mArr <- optionMaybe (brackets lis (return ()))  -- []  ← arrays sin tamaño
+    case mArr of
+      Just _  -> return (TArray t 0 , nm)  -- p[]  →  puntero a inicio de array
+      Nothing -> return (t        , nm)
+-}
 
 parseParam :: Parser (Type, Variable)
 parseParam = do
-    t  <- typeParser
-    nm <- identifier lis
-    mArr <- optionMaybe (brackets lis (return ()))  -- detecta []
-    case mArr of
-      Just _  -> return (TArray t 0, nm)   -- 0 marca "sin tamaño"
-      Nothing -> return (t, nm)
+    t0   <- typeParser                       -- palabra clave: int / char / …
+    ptrs <- many ptrStar      -- cero o más ‘*’
+    let t = foldl (\acc _ -> TPtr acc) t0 ptrs   -- int **  →  TPtr (TPtr TInt)
 
+    nm   <- identifier lis                   -- nombre del parámetro
+
+    -- ¿viene “[]” indicando array?
+    mArr <- optionMaybe (brackets lis (return ()))
+    case mArr of
+      Just _  -> return (TArray t 0, nm)     -- f(int *p[])  ⇒  puntero a inicio
+      Nothing -> return (t, nm)
 
 typeParser :: Parser Type
 typeParser =   try (reserved lis "int"    >> return TInt)
@@ -656,6 +683,9 @@ typeParser =   try (reserved lis "int"    >> return TInt)
            <|> try (reserved lis "short"  >> return TShort)
            <|> try (reserved lis "string" >> return TString)
            <|> try (reserved lis "void"   >> return TVoid)
+
+ptrStar :: Parser ()
+ptrStar = lexeme lis (char '*') >> return ()
 
 ------------------------------------
 -- Funcion de parseo principal

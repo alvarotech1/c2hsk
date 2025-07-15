@@ -1,27 +1,11 @@
-int main() {
-    int input;
-    printf("Ingrese un valor (0, 1 o cualquier otro): ");
-    scanf("%d", &input);
-    
-	switch (input) {
-        case 0: {
-            printf("Retornando sin valor\n");
-	    return 0;
-            
-        }
-        case 1: {
-		printf("case 1");
-            printf("Caso 1\n");
-		printf("pablo switch");
-            break;
-		
-        }
-        default: {
-            printf("Caso default\n");
-            break;
-        }
-    }
+void suma_y_resta(int x, int y, int *suma, int *dif) {
+    *suma = x + y;
+    *dif = x - y;
+}
 
-printf("pablo FUERA DEL switch");
+int main() {
+    int a = 8, b = 5, s, d;
+    suma_y_resta(a, b, &s, &d);
+    printf("%d %d\n", s, d); // Debe imprimir 13 3
     return 0;
 }
