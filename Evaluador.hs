@@ -9,7 +9,7 @@ import Data.Array.IO (IOArray)
 import Data.Array.IO qualified as A
 import Data.IORef
 import Data.Int (Int32)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isPrefixOf, isInfixOf)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (isJust)
@@ -34,11 +34,12 @@ data Env = Env
     typeInfo :: Map Variable Type, -- tipos de cada var lógica
     retSlot :: Maybe String, -- ⇐ *** NUEVO ***  IORef (Maybe a) p/ return
     currentFnType :: Maybe Type,
-    breakStack :: [String] -- ← pila de IORefs Bool, uno por bucle
+    breakStack :: [String], -- ← pila de IORefs Bool, uno por bucle
+    usesReadCString :: Bool
   }
 
 emptyEnv :: Env
-emptyEnv = Env [M.empty] 0 0 M.empty Nothing Nothing []
+emptyEnv = Env [M.empty] 0 0 M.empty Nothing Nothing [] False
 
 -- | Devuelve la IORef donde se almacena el valor de ‘return’, si existe.
 getRetSlot :: Gen (Maybe String)
@@ -158,16 +159,18 @@ eval ast = do
 alignLines :: [String] -> [String]
 alignLines lns =
   let (imports, others) = spanImports lns
-   in imports ++ [""] ++ others -- dejamos un salto de línea estético
+      needCString       = any ("readCString " `isInfixOf`) others
+      extra             = if needCString then [""] ++ readCStringDecl else []
+  in  imports ++ extra ++ [""] ++ others
   where
     spanImports =
       foldr
-        ( \ln (imps, rest) ->
-            if "import " `isPrefixOf` ln
-              then (ln : imps, rest)
-              else (imps, ln : rest)
-        )
+        (\ln (imps, rest) ->
+           if "import " `isPrefixOf` ln
+             then (ln : imps, rest)
+             else (imps, ln : rest))
         ([], [])
+
 
 --------------------------------------------------------------------------------
 --------------------------------------------------------------------------------VER EVALCOMM
@@ -289,34 +292,21 @@ evalComm (FuncDef retT name params body) ind
         LoopReturn _ -> continue_
         LoopBreak -> error "break fuera de un bucle"
         Continue -> continue_
-evalComm (LetType (TArray t size) v (InitList xs)) ind = do
-  ref <- declareVar v t
-
-  -- completamos la lista con ceros si es más corta
-  let paddExps = replicate (size - length xs) (defaultExp t)
-      allExps = xs ++ paddExps
-
-  -- obtenemos los tokens literales, sin tipo
-  toks <- mapM (`evalExp` ind) allExps
-
-  -- lista literal SÓLO con [1,2,3,4,5], sin ":: [Int]"
+-- char mensaje[5] = "HELLO";   |   char mensaje[] = "HELLO";
+evalComm (LetType (TArray TChar size0) v (StringExp s)) ind = do
+  let size = if size0 == 0 then length s + 1 else size0
+      padded = take size (s ++ repeat '\0')
+      chars = map CharExp padded
+  ref <- declareVar v (TArray TChar size)      -- ← guarda el tipo real
+  toks <- mapM (`evalExp` ind) chars
   let listTok = "[" ++ intercalate "," toks ++ "]"
-
   tmpArr <- freshTmp
-  emit
-    ( indentStr ind
-        ++ tmpArr
-        ++ " <- (A.newListArray ((0 :: Int32),"
-        ++ show (size - 1)
-        ++ " :: Int32) "
-        ++ listTok
-        ++ " :: IO (A.IOArray Int32 "
-        ++ translateType t
-        ++ "))"
-    )
+  emit $
+    indentStr ind ++ tmpArr ++ " <- (A.newListArray (0," ++ show (size - 1)
+      ++ ") " ++ listTok ++ " :: IO (A.IOArray Int32 Char))"
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ tmpArr)
-
   continue_
+
 
 -- int arr[5] = 7;
 evalComm (LetType (TArray t size) v rhs) ind = do
@@ -333,13 +323,14 @@ evalComm (LetType t v rhs) ind = do
   emit (indentStr ind ++ ref ++ " <- newIORef (" ++ rhsT ++ ")")
   continue_
 
--- int arr[5];   (sin inicializador)
+-- int arr[5];      |   char nombre[100];
 evalComm (LetUninit (TArray t size) v) ind = do
-  ref <- declareVar v t
-  let zeroVal = defaultInit t -- «0 :: Int», etc.
+  ref <- declareVar v (TArray t size)          -- ← guarda tipo array real
+  let zeroVal = defaultInit t
   arrTmp <- genNewArray t size zeroVal ind
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ arrTmp)
   continue_
+
 
 -- int x; o char nombre[100];  (sin inicializador)
 evalComm (LetUninit t v) ind = do
@@ -555,11 +546,23 @@ evalComm (Printf fmt args) ind = do
   argChunks <-
     mapM
       ( \a -> do
-          tok <- evalExp a ind
-          pres <- gets (const []) -- evalExp ya emite sus pres con 'emit'; no devuelve nada
-          pure ([], tok)
+          mTypes <- gets typeInfo
+          case a of
+            VarExp v
+              | Just (TArray TChar sz) <- M.lookup v mTypes -> do
+                  ref <- lookupVarM v
+                  tmpArr <- freshTmp
+                  tmpStr <- freshTmp
+                  emit (indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref)
+                  emit (indentStr ind ++ tmpStr ++ " <- readCString " ++ tmpArr ++ " " ++ show sz)
+                  modify (\st -> st { usesReadCString = True })
+                  pure ([], tmpStr)
+            _ -> do
+              tok <- evalExp a ind
+              pure ([], tok)
       )
-      args -- pres vacíos porque los emitió evalExp
+      args
+
   let (presLines, putLn) = translatePrintf ind fmt argChunks
   mapM_ emit presLines
   emit putLn
@@ -1243,3 +1246,20 @@ defaultExp TFloat = FloatExp 0.0
 defaultExp TDouble = FloatExp 0.0
 defaultExp TChar = CharExp '\0'
 defaultExp _ = IntExp 0
+
+-- | Lee un array de Char hasta el primer '\0' y lo convierte en String
+readCStringDecl :: [String]
+readCStringDecl =
+  [ "",
+    "readCString :: A.IOArray Int32 Char -> Int -> IO String",
+    "readCString arr size = go 0",
+    "  where",
+    "    go i | i >= size = return []",
+    "         | otherwise = do",
+    "             c <- A.readArray arr (fromIntegral i)",
+    "             if c == '\\0' then return []",
+    "             else do",
+    "                 rest <- go (i+1)",
+    "                 return (c : rest)"
+  ]
+

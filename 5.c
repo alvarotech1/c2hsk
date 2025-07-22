@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 void cambiarPrimero(int *arr) {
     arr[0] = 99;
 }

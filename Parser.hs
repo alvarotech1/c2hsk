@@ -552,7 +552,10 @@ parseVarDecl = try $ do
 
     decls   <- commaSep1 lis $ do
         name  <- identifier lis
-        mSize <- optionMaybe (brackets lis (fromInteger <$> integer lis))
+        -- []  acepta “char x[]”  (devuelve 0)
+        -- [N] acepta “char x[10]”
+        mSize <- optionMaybe $ brackets lis $
+                    option 0 (fromInteger <$> integer lis)
         notFollowedBy (parens lis (commaSep lis parseParam))
         mInit <- optionMaybe parseInitializer
         let realType = maybe t (\n -> TArray t n) mSize

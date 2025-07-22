@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 void swap(int *a, int *b) {
     int tmp = *a;
     *a = *b;
@@ -6,7 +8,9 @@ void swap(int *a, int *b) {
 
 int main() {
     int x = 3, y = 7;
-    swap(&x, &y);
+    int *p1 = &x;
+    int *p2 = &y;
+    swap(p1, p2);
     printf("%d %d\n", x, y); // Debe imprimir 7 3
     return 0;
 }
