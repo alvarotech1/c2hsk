@@ -1,48 +1,112 @@
-# C2Haskell: Traductor de C a Haskell
+C2Haskell: Traductor de C a Haskell
+Descripción General
 
-**C2Haskell** es un proyecto en desarrollo cuyo objetivo es traducir programas escritos en C a su equivalente en Haskell, respetando las diferencias semánticas y estructurales entre ambos lenguajes. Este traductor está diseñado con un scope acotado, priorizando inicialmente la traducción de estructuras y construcciones comunes y simples del lenguaje C.
+C2Haskell es un traductor automático cuyo objetivo es convertir código fuente en lenguaje C a su equivalente en Haskell. El proyecto busca respetar tanto la sintaxis como la semántica del código original, considerando especialmente las diferencias estructurales y conceptuales entre ambos lenguajes, como la inmutabilidad de las variables en Haskell.
 
+Se apoya en técnicas tradicionales de construcción de compiladores, incluyendo un analizador sintáctico (Parser) y un generador de código (Evaluador), todo desarrollado en Haskell.
+Objetivos
 
-> ⚠️ Este proyecto está en una etapa temprana de desarrollo. Las traducciones completas y complejas aún no están soportadas.
+    Traducir programas escritos en C a programas equivalentes en Haskell.
 
-## ✨ Objetivo
+    Mantener la validez sintáctica del código generado.
 
-Facilitar la comprensión y transición de programas escritos en C al paradigma funcional de Haskell, ofreciendo una herramienta automatizada que realice traducciones parciales y legibles.
+    Preservar la semántica original, incluida la salida por consola.
 
-## 🔧 Características soportadas (hasta ahora)
+    Utilizar herramientas y estructuras propias del paradigma funcional, simulando mutabilidad cuando sea necesario.
 
-Actualmente, el traductor soporta la conversión de los siguientes elementos:
+Estructura del Proyecto
 
-**Estructuras de control**  
-- `if-else` 
-- Bucles `while` 
-- Secuenciación de comandos (`;`)  
+El código fuente se encuentra dividido en los siguientes módulos:
 
-**Manejo de funciones**  
-- Declaración de funciones con tipos de retorno  
-- Parámetros formales tipados  
-- `return` 
-- Llamadas a funciones simples  
+    AST.hs: Define la estructura del Árbol de Sintaxis Abstracta que representa un programa en C.
 
-**Tipos básicos**  
-- `int`, `float`, `double`, `char`, `string`  
-- Promoción automática numérica (ej: `int + float → float`)  
+    Parser.hs: Implementa un parser utilizando Parsec, que convierte el código C en un AST.
 
-**Entrada/Salida**  
-- `printf` básico con strings literales y expresiones  
-- Traducción a `putStrLn` de Haskell  
+    Evaluador.hs: Traduce el AST a código Haskell, línea por línea.
 
-**Funciones en C**  
-  Traducción de definiciones de funciones simples a funciones puras en Haskell.
+    Main.hs: Orquesta el proceso de lectura, parsing, evaluación y escritura del archivo de salida.
 
-### 📜 Características en proceso
+Funcionalidades Soportadas
+Control de Flujo
 
-- Manejo de archivos
-- Arrays
-- Structs
-- Punteros
-- `for` loops
-- `switch` case
+    Condicionales if, if-else
 
+    Bucles while, do-while, for
 
-![raw](https://github.com/user-attachments/assets/0871eb29-90a7-40dc-81c1-66676e8b7c84)
+    Instrucción break
+
+    Switch-case con case y default
+
+Declaraciones y Tipos
+
+    Declaraciones inicializadas y no inicializadas (int x;, float a = 3.0;)
+
+    Tipos básicos: int, float, double, char, string, long, short, void
+
+    Constantes (const int a = 5;)
+
+    Arrays unidimensionales con y sin inicialización (int arr[5];, int arr[3] = {1,2,3};)
+
+    Punteros y desreferenciación (int* p; *p = 10;)
+
+Expresiones
+
+    Aritméticas y booleanas: +, -, *, /, %, ==, !=, <, >, etc.
+
+    Operadores unarios y postfijos: ++, --, -e, !e
+
+    Acceso a arrays: arr[i]
+
+    Toma de dirección y desreferencia: &x, *p
+
+Entrada/Salida
+
+    printf con formatos %d, %f, %s, %c, etc.
+
+    scanf básico para variables simples y arr[i]
+
+Funciones
+
+    Definición de funciones (con o sin parámetros)
+
+    Funciones void y con retorno (int suma(int a, int b))
+
+    Llamadas a funciones
+
+    Mecanismo de retorno (return)
+
+Limitaciones Actuales
+
+    No se soporta recursión mutua entre funciones.
+
+    No se implementa manejo de memoria dinámica (malloc, free).
+
+    No se traduce aún código C que hace uso de estructuras (struct) complejas anidadas.
+
+    No hay soporte para punteros a funciones.
+
+    No se generan tipos algebraicos equivalentes a struct.
+
+Instrucciones de Uso
+
+    Guardar el archivo en C con extensión 
+
+    Ejecutar el archivo Main.hs. Esto puede hacerse desde GHCi:
+
+    ghci Main.hs
+
+    Luego dentro del entorno de ghci se llama a la funcion "run" mas el archivo c a traducir, por ejemplo run "asignacion.c".
+
+    Esto ejecutara el traductor, devolverá tanto por terminal como un archivo .hs con el codigo haskell listo para compilar y ejecutar.
+
+Requisitos
+
+    GHC 9.x o superior
+
+    Paquete parsec para análisis sintáctico
+
+    Sistema operativo compatible con ejecución Haskell estándar
+
+Estado del Proyecto
+
+Este proyecto se encuentra en una etapa de desarrollo. Si bien no cubre todos los aspectos del lenguaje C, ha sido probado con múltiples programas de estructura media y ha demostrado generar código Haskell funcional y legible.
