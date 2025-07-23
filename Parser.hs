@@ -214,52 +214,6 @@ parseComparison = do
     return (op e1 e2)
 
 
-
-
-{-
---COM QUE IGNORA PUNTO Y COMA
---Secuencia de comandos:  c1; c2; c3 …  (el ‘;’ final de cada cᵢ es opcional)
-comm :: Parser Comm
-comm = do
-    cs <- many1 $ do
-        c <- comm2                 -- una sentencia
-        optional (reservedOp lis ";")  -- come ‘;’ si está
-        return c
-    return (foldr1 Seq cs)         -- enlaza c₁ ▷ c₂ ▷ …
--}
-
-{-
-
-COM VIEJO:
-
-comm :: Parser Comm
-comm = chainl1 comm2 (try (do reservedOp lis ";"
-                              return Seq))
--}
-
-{-
-COMM2 Viejo
-comm2 :: Parser Comm
-comm2 =
-      try (do reserved lis "skip"
-              return Skip)
-  <|> try parseFuncDef
-  <|> try parseVarDecl        
-  <|> try parseIfElse
-  <|> try parseIfOnly
-  <|> try parseFor
-  <|> try parseBreak 
-  <|> try parseWhile
-  <|> try parseDoWhile  
-  <|> try parseReturn
-  <|> try parseArrayAssign
-  <|> try parseAssign
-  <|> try parsePrintf
-  <|> try parseScanf
-  <|> try commBlock
-  <|> try parseExprStmt  -- OJO, debería estar aca? averiguar       
--}
-
 comm :: Parser Comm
 comm = do
   many (try includeLine)
@@ -417,18 +371,6 @@ commBlock = do
     body <- braces lis (comm <|> return Skip)
     return (Block body)
 
-{-  este no permite if () else if ()
--- Parser para if con else (C style)
-parseIfElse :: Parser Comm
-parseIfElse = do
-    reserved lis "if"
-    cond <- parens lis boolexp
-    ifBlock <- commBlock
-    reserved lis "else"
-    elseBlock <- comm --riesgo, a rezar que no entre en otro que no sea Block porq podria generar problemas de scope.
-    return (Cond cond ifBlock elseBlock)
--}
-
 -- un “statement” es o bien uno de los que llevan ';', o uno sin ';' (incluyendo blocks, if, while…)
 singleStmt :: Parser Comm
 singleStmt = try commSemicolon <|> commNoSemicolon
@@ -485,14 +427,6 @@ parseScanf = do
         vars <- commaSep1 lis parseLValue    -- al menos un l-value
         return (fmt, vars)
 
-    -- Solo acepta variable simple o acceso a array (arr[i])
-{-
-parseLValue :: Parser Exp
-parseLValue = do
-    _ <- optionMaybe (reservedOp lis "&")
-    try parseArrayAccess
-    <|> (VarExp <$> identifier lis)
--}
 parseLValue :: Parser Exp
 parseLValue = do
   _    <- optionMaybe (reservedOp lis "&")   -- &  (ignoramos el resultado)
@@ -521,26 +455,6 @@ parseFuncCall = do
     funName <- identifier lis
     args    <- parens lis (commaSep lis intexp) 
     return (CallExp funName args)
-
-{-
-VARDECL FRANCO SACADO EL 24-05
-parseVarDecl :: Parser Comm
-parseVarDecl = try $ do
-     isConst <- optionMaybe (reserved lis "const")
-     t       <- typeParser
-     decls <- commaSep1 lis $ do
-        name  <- identifier lis
-        mSize <- optionMaybe (brackets lis (fromInteger <$> integer lis))
-        notFollowedBy (parens lis (commaSep lis parseParam))
-        mInit <- optionMaybe (reservedOp lis "=" >> intexp)
-        let realType = maybe t (\n -> TArray t (fromInteger n)) mSize
-        return (realType, name, mInit)
-     let
-      toLet (ty,v,me) = case isConst of
-          Just _  -> LetConst ty v (maybe (defaultInit ty) id me)
-          Nothing -> LetType  ty v (maybe (defaultInit ty) id me)
-     return (foldr1 Seq (map toLet decls))
--}
 
 --VARDECL SIGMA CON IMPLEMENTACION DE CONST
 parseVarDecl :: Parser Comm
@@ -641,27 +555,6 @@ parseFuncDef = do
     body     <- comm
     reservedOp lis "}"
     return (FuncDef retType funcName params body)
-
-{-
-parseParam :: Parser (Type, Variable)
-parseParam = do
-    t  <- typeParser
-    nm <- identifier lis
-    return (t, nm)
--}
-{-
--- Parser.hs  · parseParam
-parseParam :: Parser (Type, Variable)
-parseParam = do
-    t0   <- typeParser                   -- int / float / …
-    ptrs <- many (reservedOp lis "*")    -- cero o más ‘*’
-    let t = foldl (\acc _ -> TPtr acc) t0 ptrs   -- int **p → TPtr (TPtr TInt)
-    nm   <- identifier lis
-    mArr <- optionMaybe (brackets lis (return ()))  -- []  ← arrays sin tamaño
-    case mArr of
-      Just _  -> return (TArray t 0 , nm)  -- p[]  →  puntero a inicio de array
-      Nothing -> return (t        , nm)
--}
 
 parseParam :: Parser (Type, Variable)
 parseParam = do

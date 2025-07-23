@@ -14,9 +14,6 @@ import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (isJust)
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER ENV
---------------------------------------------------------------------------------
 -- Cada variable lógica se asocia al nombre de la IORef que la contiene
 type Binding = String
 
@@ -135,20 +132,6 @@ declareVar v t = do
           }
   pure ref
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER EVAL
---------------------------------------------------------------------------------
-{-
-eval :: Comm -> IO ()
-eval ast = do
-  let ((_, _finalEnv), hsLines) =
-        runWriter (runStateT (evalComm ast 0) emptyEnv)
-  mapM_ putStrLn hsLines
-
-alignLines :: [String] -> [String]
-alignLines = id          -- por ahora no tocamos el alineador sofisticado
--}
-
 eval :: Comm -> IO ()
 eval ast = do
   let ((_, _finalEnv), raw) =
@@ -172,9 +155,6 @@ alignLines lns =
         ([], [])
 
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER EVALCOMM
---------------------------------------------------------------------------------
 evalComm :: Comm -> Int -> Gen (LoopCtrl ())
 -- 4.1  skip
 evalComm Skip _ = continue_
@@ -221,9 +201,6 @@ evalComm (FuncDef retT "main" _ body) ind = do
   emit (indentStr (ind + 2) ++ "return ()")
   continue_
 
--- -------------------------------------------------------------------
--- Funciones definidas por el usuario  (no main)
--- -------------------------------------------------------------------
 -- -------------------------------------------------------------------
 --  Funciones definidas por el usuario  (≠ main)
 -- -------------------------------------------------------------------
@@ -1017,10 +994,6 @@ evalExp (Deref e) ind = do
 evalExp other _ =
   error $ "evalExp: constructor aún no soportado → " ++ show other
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER EVALBOOLEXP
---------------------------------------------------------------------------------
-
 evalBoolExp :: BoolExp -> Int -> Gen String
 evalBoolExp BTrue _ = pure "True"
 evalBoolExp BFalse _ = pure "False"
@@ -1162,21 +1135,6 @@ freshTmp = do
   n <- gets tmpCounter
   modify $ \e -> e {tmpCounter = n + 1}
   pure ("tmp" ++ show n)
-
-{-    estaria piola que sea como este, era mas lindo este:
-evalBoolExp :: BoolExp -> Env -> String
-evalBoolExp BTrue _           = "True"
-evalBoolExp BFalse _          = "False"
-evalBoolExp (Not b) env       = "not (" ++ evalBoolExp b env ++ ")"
-evalBoolExp (And b1 b2) env   = "(" ++ evalBoolExp b1 env ++ " && " ++ evalBoolExp b2 env ++ ")"
-evalBoolExp (Or  b1 b2) env   = "(" ++ evalBoolExp b1 env ++ " || " ++ evalBoolExp b2 env ++ ")"
-evalBoolExp (Eq  e1 e2) env   = "(" ++ evalExp e1 env ++ " == " ++ evalExp e2 env ++ ")"
-evalBoolExp (Neq e1 e2) env   = "(" ++ evalExp e1 env ++ " /= " ++ evalExp e2 env ++ ")"
-evalBoolExp (Lt  e1 e2) env   = "(" ++ evalExp e1 env ++ " < "  ++ evalExp e2 env ++ ")"
-evalBoolExp (Le  e1 e2) env   = "(" ++ evalExp e1 env ++ " <= " ++ evalExp e2 env ++ ")"
-evalBoolExp (Gt  e1 e2) env   = "(" ++ evalExp e1 env ++ " > "  ++ evalExp e2 env ++ ")"
-evalBoolExp (Ge  e1 e2) env   = "(" ++ evalExp e1 env ++ " >= " ++ evalExp e2 env ++ ")"
--}
 
 isSkip :: Comm -> Bool
 isSkip Skip = True
