@@ -19,8 +19,9 @@ lis = makeTokenParser (emptyDef
     , commentEnd      = "*/"
     , commentLine     = "//"
     , reservedNames   = ["true","false","skip","if","then","else","end",
-                         "while","do","return","printf", "void","for", "const","break","scanf","switch","case","default", "sqrt", "pow", "log2"]
-    , reservedOpNames = ["+=", "-=", "*=", "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "&" ,"!", "=", ";", "{", "}", ",", "(", ")",":" ]
+                         "while","do","return","printf", "void","for", "const","break","scanf","switch","case","default", "sqrt", "pow", "log2", "struct" ]
+    , reservedOpNames = ["+=", "-=", "*=", "+", "-", "*", "/","%", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "&" ,"!",
+                         ".", "=", ";", "{", "}", ",", "(", ")",":" ]
     }
   )
 
@@ -50,7 +51,8 @@ parseMulDiv = chainl1 parseFactor (mulOp <|> divOp)
 
 parseFactor :: Parser Exp
 parseFactor =
-      try parseArrayAccess    
+      try parseFieldAccess -- p.edad
+  <|> try parseArrayAccess
   <|> try parsePreIncr
   <|> try parsePreDecr
   <|> try parsePostIncr
@@ -69,6 +71,17 @@ parseFactor =
   <|> try log2Exp
 
   <|> (VarExp <$> identifier lis)
+
+-- p.edad  /  p.persona.edad (solo 1 nivel por ahora)
+parseFieldAccess :: Parser Exp
+parseFieldAccess = do
+  base <- parseVar
+  rest <- many1 (do
+    reservedOp lis "."
+    field <- identifier lis
+    return field)
+  return (foldl FieldAccess base rest)
+
 
 -- &e   (tomar dirección)
 parseAddrOf :: Parser Exp
@@ -230,7 +243,8 @@ commSemicolon = do
 -- Lista de comandos que requieren ;
 commNeedsSemicolon :: Parser Comm
 commNeedsSemicolon =
-      try parseAssign
+      try parseAssignField -- p.edad
+  <|> try parseAssign
   <|> try parseAssignDeref  
   <|> try parseExprStmt
   <|> try parsePrintf
@@ -244,7 +258,8 @@ commNeedsSemicolon =
 -- Comandos que no requieren ;
 commNoSemicolon :: Parser Comm
 commNoSemicolon =
-      try parseFuncDef
+      try parseStructDef -- struct
+  <|> try parseFuncDef
   <|> try parseIfElse
   <|> try parseIfOnly
   <|> try parseWhile
@@ -252,6 +267,38 @@ commNoSemicolon =
   <|> try parseSwitch  
   <|> try parseFor
   <|> try commBlock
+
+-- Struct definition 
+parseStructDef :: Parser Comm
+parseStructDef = do
+  reserved lis "struct"
+  name <- identifier lis
+  fields <- braces lis (many1 parseFieldDecl)
+  optional (reservedOp lis ";")
+  return (StructDef name fields)
+  where
+    parseFieldDecl :: Parser (Type, Variable)
+    parseFieldDecl = do
+      t0 <- typeParser
+      ptrs <- many ptrStar
+      let t = foldl (\acc _ -> TPtr acc) t0 ptrs
+      v <- identifier lis
+      mSize <- optionMaybe $ brackets lis (fromInteger <$> integer lis)
+      reservedOp lis ";"
+      let finalType = maybe t (\n -> TArray t n) mSize
+      return (finalType, v)
+
+
+-- Asignación a campo: p.edad = expr 
+parseAssignField :: Parser Comm
+parseAssignField = try $ do
+  obj <- identifier lis
+  reservedOp lis "."
+  fld <- identifier lis
+  reservedOp lis "="
+  rhs <- try (BoolAsIntExp <$> boolexp) <|> intexp
+  return (AssignField obj fld rhs)
+
 
 
 parseExprStmt :: Parser Comm
@@ -268,9 +315,7 @@ parseBreak :: Parser Comm
 parseBreak = reserved lis "break" >> return Break
 
 
-------------------------------------------------------------------
 -- switch (expr) { case … ; … ; default: … }
-------------------------------------------------------------------
 
 parseSwitch :: Parser Comm
 parseSwitch = do
@@ -288,10 +333,8 @@ parseSwitch = do
     isDefault DefaultCase{} = True
     isDefault _             = False
 
-    --------------------------------------------------------------
-    -- Secciones -------------------------------------------------
-    --------------------------------------------------------------
-    parseSection :: Parser Case
+    -- Secciones  
+    -- parseSection :: Parser Case
     parseSection =  try parseCase
                 <|> parseDefault
 
@@ -315,9 +358,7 @@ parseSwitch = do
       <|> try parseChar                    -- 'x'
       <|> parseInt                         -- 42
 
-    --------------------------------------------------------------
     -- Cuerpo: lee comandos hasta el próximo case|default|}
-    --------------------------------------------------------------
     parseCaseBody =
         fmap (foldr Seq Skip)
              (manyTill caseStmt
@@ -427,14 +468,15 @@ parseScanf = do
         vars <- commaSep1 lis parseLValue    -- al menos un l-value
         return (fmt, vars)
 
+   -- Solo acepta variable simple o acceso a array (arr[i])
+
 parseLValue :: Parser Exp
 parseLValue = do
-  _    <- optionMaybe (reservedOp lis "&")   -- &  (ignoramos el resultado)
-  name <- identifier lis                     -- siempre hay un identificador
-  mIdx <- optionMaybe (brackets lis intexp)  -- ¿viene  “[expr]”  ?
-  return $ case mIdx of
-             Just idx -> ArrayAccess name idx
-             Nothing  -> VarExp name
+  _ <- optionMaybe (reservedOp lis "&")   -- ignoramos '&' si está
+  try parseArrayAccess
+    <|> try parseFieldAccess
+    <|> parseVar
+
 
 
 parseAssign :: Parser Comm
@@ -461,7 +503,7 @@ parseVarDecl :: Parser Comm
 parseVarDecl = try $ do
     isConst <- optionMaybe (reserved lis "const")    -- ¿lleva const?
     t0      <- typeParser
-    ptrs <- many ptrStar              -- lee cero o más “*”
+    ptrs    <- many ptrStar             -- lee cero o más “*”
     let t = foldl (\acc _ -> TPtr acc) t0 ptrs       -- construye TPtr anidado
 
     decls   <- commaSep1 lis $ do
@@ -509,9 +551,13 @@ parseAssignDeref = do
 -- identificador '[' exp ']'
 parseArrayAccess :: Parser Exp
 parseArrayAccess = do
-    arr <- identifier lis
-    idx <- brackets lis intexp
-    return (ArrayAccess arr idx)
+  base <- parseVar
+  idx  <- brackets lis intexp
+  return (ArrayAccess (getVarName base) idx)
+  where
+    getVarName (VarExp v) = v
+    getVarName _ = error "array access solo con variable simple"
+
 
 -- asignación a elemento: arr[exp] = exp
 parseArrayAssign :: Parser Comm
@@ -556,18 +602,19 @@ parseFuncDef = do
     reservedOp lis "}"
     return (FuncDef retType funcName params body)
 
+
+
 parseParam :: Parser (Type, Variable)
 parseParam = do
-    t0   <- typeParser                       -- palabra clave: int / char / …
-    ptrs <- many ptrStar      -- cero o más ‘*’
-    let t = foldl (\acc _ -> TPtr acc) t0 ptrs   -- int **  →  TPtr (TPtr TInt)
+    t0  <- typeParser -- int / char / ...
+    ptrs <- many ptrStar -- *, **, ...
+    let t = foldl (\acc _ -> TPtr acc) t0 ptrs
+    nm <- identifier lis   -- nombre del parametro
 
-    nm   <- identifier lis                   -- nombre del parámetro
-
-    -- ¿viene “[]” indicando array?
-    mArr <- optionMaybe (brackets lis (return ()))
+    -- verificacion si hay un []
+    mArr <- optionMaybe (brackets lis (return ())) -- es un array?
     case mArr of
-      Just _  -> return (TArray t 0, nm)     -- f(int *p[])  ⇒  puntero a inicio
+      Just _ -> return (TArray t 0, nm) -- array sin tamaño especifico
       Nothing -> return (t, nm)
 
 typeParser :: Parser Type
@@ -579,12 +626,20 @@ typeParser =   try (reserved lis "int"    >> return TInt)
            <|> try (reserved lis "short"  >> return TShort)
            <|> try (reserved lis "string" >> return TString)
            <|> try (reserved lis "void"   >> return TVoid)
+           <|> try parseStructType -- struct X
 
 ptrStar :: Parser ()
 ptrStar = lexeme lis (char '*') >> return ()
 
-------------------------------------
+parseStructType :: Parser Type
+parseStructType = do
+  reserved lis "struct"
+  TStruct <$> identifier lis
+
+parseVar :: Parser Exp
+parseVar = VarExp <$> identifier lis
+
+
 -- Funcion de parseo principal
-------------------------------------
 parseComm :: SourceName -> String -> Either ParseError Comm
 parseComm = parse (totParser program)

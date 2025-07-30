@@ -2,10 +2,9 @@ module Evaluador where
 
 import AST
 import Control.Applicative ((<|>))
-import Control.Monad (forM_, when)
-import Control.Monad.State (StateT, get, gets, modify, put, runStateT)
+import Control.Monad (forM_, when, void)
+import Control.Monad.State (StateT, get, gets, modify, runStateT)
 import Control.Monad.Writer (Writer, runWriter, tell)
-import Data.Array.IO (IOArray)
 import Data.Array.IO qualified as A
 import Data.IORef
 import Data.Int (Int32)
@@ -13,6 +12,9 @@ import Data.List (intercalate, isPrefixOf, isInfixOf)
 import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (isJust)
+import Data.Char (isAlphaNum)
+
+-- ENV
 
 -- Cada variable lógica se asocia al nombre de la IORef que la contiene
 type Binding = String
@@ -20,6 +22,8 @@ type Binding = String
 type Gen = StateT Env (Writer [String]) -- Gen a  ≡  Env -> (a, Env, [String])
 
 type Scope = Map Variable Binding
+
+type StructDefs = Map String [(Type, Variable)] 
 
 data LoopCtrl a = Continue | LoopBreak | LoopReturn a
   deriving (Show, Eq)
@@ -32,11 +36,13 @@ data Env = Env
     retSlot :: Maybe String, -- ⇐ *** NUEVO ***  IORef (Maybe a) p/ return
     currentFnType :: Maybe Type,
     breakStack :: [String], -- ← pila de IORefs Bool, uno por bucle
+    structDefs :: StructDefs, -- registra los structs definidos
     usesReadCString :: Bool
   }
 
 emptyEnv :: Env
-emptyEnv = Env [M.empty] 0 0 M.empty Nothing Nothing [] False
+emptyEnv =
+  Env [M.empty] 0 0 M.empty Nothing Nothing [] M.empty False
 
 -- | Devuelve la IORef donde se almacena el valor de ‘return’, si existe.
 getRetSlot :: Gen (Maybe String)
@@ -64,9 +70,10 @@ getBreakRef = do
 
 -- | Devuelve el IORef (como String) que representa un lvalue
 getRefOfLValue :: Exp -> Int -> Gen String
+getRefOfLValue (FieldAccess (VarExp v) fld) _ = lookupVarM (v ++ "." ++ fld) 
 getRefOfLValue (VarExp v) _ = lookupVarM v
 
-getRefOfLValue (Deref e) ind = evalExp e ind   -- ¡ya ES la IORef base!
+getRefOfLValue (Deref e) ind = evalExp e ind           -- devuelve IORef a
 
 getRefOfLValue (ArrayAccess arr idxExp) ind = do
   arrRef <- lookupVarM arr
@@ -94,9 +101,8 @@ isDecl (LetUninit _ _) = True
 isDecl (Seq a b) = isDecl a && isDecl b
 isDecl _ = False
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER HELPER ENV
---------------------------------------------------------------------------------
+-- HELPER ENV
+
 pushScope, popScope :: Gen ()
 pushScope = modify $ \e -> e {scopes = M.empty : scopes e}
 popScope = modify $ \e ->
@@ -112,14 +118,15 @@ lookupVarM :: Variable -> Gen String
 lookupVarM v = do
   mb <- gets (lookupVar v)
   case mb of
-    Nothing -> error $ "Variable no declarada: " ++ v
     Just ref -> pure ref
+    Nothing -> error $ "Variable no declarada: " ++ v
 
 freshName :: Variable -> Gen String
 freshName v = do
   n <- gets counter
   modify $ \e -> e {counter = n + 1}
-  pure (v ++ "_ref" ++ show n)
+  let base = sanitize v
+  pure (base ++ "_ref" ++ show n)
 
 declareVar :: Variable -> Type -> Gen String
 declareVar v t = do
@@ -132,40 +139,48 @@ declareVar v t = do
           }
   pure ref
 
-eval :: Comm -> IO ()
-eval ast = do
-  let ((_, _finalEnv), raw) =
-        runWriter (runStateT (evalComm ast 0) emptyEnv)
 
-  mapM_ putStrLn (alignLines raw)
+--  helper para registrar y consultar structs 
+ 
+registerStruct :: String -> [(Type,Variable)] -> Gen ()         -- NEW
+registerStruct nm flds = modify $ \e -> e{ structDefs = M.insert nm flds (structDefs e) }
 
+fieldsOf :: String -> Gen [(Type,Variable)]                    -- NEW
+fieldsOf nm = do
+  m <- gets structDefs
+  case M.lookup nm m of
+    Just xs -> pure xs
+    Nothing -> error $ "Struct no definido: " ++ nm
+  
+-- EVAL
 alignLines :: [String] -> [String]
 alignLines lns =
   let (imports, others) = spanImports lns
-      needCString       = any ("readCString " `isInfixOf`) others
-      extra             = if needCString then [""] ++ readCStringDecl else []
+      needCString = any (("readCString" `isInfixOf`) . dropWhile (== ' ')) others
+      extra = if needCString then [""] ++ readCStringDecl else []
   in  imports ++ extra ++ [""] ++ others
-  where
-    spanImports =
-      foldr
-        (\ln (imps, rest) ->
-           if "import " `isPrefixOf` ln
-             then (ln : imps, rest)
-             else (imps, ln : rest))
-        ([], [])
+
+spanImports :: [String] -> ([String], [String])
+spanImports =
+  foldr
+    (\ln (imps, rest) ->
+       if "import " `isPrefixOf` ln
+         then (ln : imps, rest)
+         else (imps, ln : rest))
+    ([], [])
 
 
+-- EVALCOMM
+ 
 evalComm :: Comm -> Int -> Gen (LoopCtrl ())
 -- 4.1  skip
 evalComm Skip _ = continue_
--- -------------------------------------------------------------------
 --  Definición de main  (con slot de retorno unificado)
--- -------------------------------------------------------------------
 evalComm (FuncDef retT "main" _ body) ind = do
   -- imports principales (una sola vez)
   emit ""
   emit "import Data.IORef"
-  emit "import Control.Monad (when)"
+  emit "import Control.Monad (when, void)"
   emit "import qualified Data.Array.IO as A"
   emit "import Data.Maybe (isJust)"
   emit "import Data.Int (Int32)"
@@ -201,9 +216,8 @@ evalComm (FuncDef retT "main" _ body) ind = do
   emit (indentStr (ind + 2) ++ "return ()")
   continue_
 
--- -------------------------------------------------------------------
---  Funciones definidas por el usuario  (≠ main)
--- -------------------------------------------------------------------
+-- Funciones definidas por el usuario  (no main)
+ 
 evalComm (FuncDef retT name params body) ind
   | name /= "main" = do
       -- 1) firma de tipo y cabecera
@@ -222,10 +236,9 @@ evalComm (FuncDef retT name params body) ind
       -- 2) scope léxico propio
       pushScope
 
-      -- 3) parámetros en IORefs
-      forM_ params $ \(t, v) -> do
-        ref <- declareVar v t
-        emit (indentStr (ind + 2) ++ ref ++ " <- newIORef " ++ v)
+      -- 3) parámetros en IORefs (con helper que evita doble IORef)
+      forM_ params $ \p ->
+        bindParam p (ind + 2)
 
       -- 4) preparar slot de retorno (siempre, también en void)
       oldSlot <- gets retSlot
@@ -257,7 +270,7 @@ evalComm (FuncDef retT name params body) ind
             ( indentStr (ind + 4)
                 ++ "Nothing -> error \"\\\""
                 ++ name
-                ++ "\\\" terminó sin ejecutar return\""
+                ++ "\\\" termino sin ejecutar return\""
             )
 
       -- 7) restaurar entorno y cerrar scope
@@ -269,12 +282,65 @@ evalComm (FuncDef retT name params body) ind
         LoopReturn _ -> continue_
         LoopBreak -> error "break fuera de un bucle"
         Continue -> continue_
--- char mensaje[5] = "HELLO";   |   char mensaje[] = "HELLO";
+
+evalComm (LetType (TArray t size) v (InitList xs)) ind = do
+  ref <- declareVar v t
+
+  -- completamos la lista con ceros si es más corta
+  let paddExps = replicate (size - length xs) (defaultExp t)
+      allExps = xs ++ paddExps
+
+  -- obtenemos los tokens literales, sin tipo
+  toks <- mapM (`evalExp` ind) allExps
+
+  -- lista literal SÓLO con [1,2,3,4,5], sin ":: [Int]"
+  let listTok = "[" ++ intercalate "," toks ++ "]"
+
+  tmpArr <- freshTmp
+  emit
+    ( indentStr ind
+        ++ tmpArr
+        ++ " <- (A.newListArray ((0 :: Int32),"
+        ++ show (size - 1)
+        ++ " :: Int32) "
+        ++ listTok
+        ++ " :: IO (A.IOArray Int32 "
+        ++ translateType t
+        ++ "))"
+    )
+  emit (indentStr ind ++ ref ++ " <- newIORef " ++ tmpArr)
+
+  continue_
+
+-- Struct
+evalComm (StructDef nm campos) _ = do                   -- NEW
+  registerStruct nm campos
+  continue_
+
+-- 2) Declaración sin inicializador:  struct Persona p;
+
+evalComm (LetUninit (TStruct nm) var) ind = do          -- NEW
+  flds <- fieldsOf nm
+  forM_ flds $ \(t,f) -> do
+     let logical = var ++ "." ++ f
+     ref <- declareVar logical t
+     emit (indentStr ind ++ ref ++ " <- newIORef " ++ defaultInit t)
+  continue_
+
+-- 3) Asignación a campo  p.edad = expr;
+
+evalComm (AssignField obj fld rhs) ind = do            -- NEW
+  ref <- lookupVarM (obj ++ "." ++ fld)
+  rhsTok <- evalExp rhs ind
+  emit (indentStr ind ++ "writeIORef " ++ ref ++ " (" ++ rhsTok ++ ")")
+  continue_
+
+-- char nombre[10] = "HOLA";
 evalComm (LetType (TArray TChar size0) v (StringExp s)) ind = do
   let size = if size0 == 0 then length s + 1 else size0
       padded = take size (s ++ repeat '\0')
       chars = map CharExp padded
-  ref <- declareVar v (TArray TChar size)      -- ← guarda el tipo real
+  ref <- declareVar v (TArray TChar size)
   toks <- mapM (`evalExp` ind) chars
   let listTok = "[" ++ intercalate "," toks ++ "]"
   tmpArr <- freshTmp
@@ -284,6 +350,12 @@ evalComm (LetType (TArray TChar size0) v (StringExp s)) ind = do
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ tmpArr)
   continue_
 
+{-
+El caso de LetType de arriba es muy importante, ya que sin esto el evaluadro trata StringExp "HELLO" como si ...
+fuera un valor tipo String directamente. Esto hace que no tengas acceso caracter por caracter ni control del \0...
+y eso rompe el comportamiento esperado en operaciones como: printf("%s", mensaje);
+-}
+  
 
 -- int arr[5] = 7;
 evalComm (LetType (TArray t size) v rhs) ind = do
@@ -300,14 +372,13 @@ evalComm (LetType t v rhs) ind = do
   emit (indentStr ind ++ ref ++ " <- newIORef (" ++ rhsT ++ ")")
   continue_
 
--- int arr[5];      |   char nombre[100];
+-- int arr[5];   (sin inicializador)
 evalComm (LetUninit (TArray t size) v) ind = do
   ref <- declareVar v (TArray t size)          -- ← guarda tipo array real
   let zeroVal = defaultInit t
   arrTmp <- genNewArray t size zeroVal ind
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ arrTmp)
   continue_
-
 
 -- int x; o char nombre[100];  (sin inicializador)
 evalComm (LetUninit t v) ind = do
@@ -318,11 +389,13 @@ evalComm (LetUninit t v) ind = do
   let initVal = defaultInit t'
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ initVal)
   continue_
+
 evalComm (Assign v rhs) ind = do
   ref <- lookupVarM v
   rhsT <- evalExp rhs ind
   emit (indentStr ind ++ "writeIORef " ++ ref ++ " (" ++ rhsT ++ ")")
   continue_
+
 evalComm (AssignArr arrVar idxExp rhsExp) ind = do
   refTok <- lookupVarM arrVar
   idxTok <- evalExp idxExp ind
@@ -341,18 +414,18 @@ evalComm (AssignArr arrVar idxExp rhsExp) ind = do
         ++ ")"
     )
   continue_
+
+-- Se ejecuta cuando llamas a una funcion aux.
 evalComm (ExprStmt e) ind = case e of
   CallExp fn args -> do
     toks <- mapM (\a -> evalExp a ind) args
-    emit (indentStr ind ++ "_ <- " ++ unwords (fn : toks))
+    emit (indentStr ind ++ "void $ " ++ unwords (fn : toks))
     continue_
   _ -> do
     _ <- evalExp e ind
     continue_
 
--- -------------------------------------------------------------------
 --  Return expr  –  sólo escribe cuando todavía no hay valor guardado
--- -------------------------------------------------------------------
 evalComm (Return expr) ind = do
   tok <- evalExp expr ind -- se evalúa siempre (efectos)
   mSlot <- getRetSlot -- IORef donde guardamos el flag
@@ -382,24 +455,21 @@ evalComm (Return expr) ind = do
   -- Propagamos el control para que callers sepan que hubo ‘return’
   return (LoopReturn ())
 
--- -------------------------------------------------------------------
 --  Return   (sin valor)   ⇒   escribe () en el slot, si corresponde
--- -------------------------------------------------------------------
 evalComm ReturnVoid ind = do
   mSlot <- getRetSlot
   case mSlot of
-    ------------------------------------------------------------------
-    -- return; FUERA de cualquier función (ilegal en C).
-    -- Generamos “error …” para abortar en tiempo de ejecución.
-    ------------------------------------------------------------------
+ {-  
+    return; FUERA de cualquier función (ilegal en C).
+    Generamos “error …” para abortar en tiempo de ejecución.
+ -}
     Nothing -> do
       emit (indentStr ind ++ "error \"return fuera de contexto\"")
       -- avisamos al caller que hubo return (aunque nunca debería volver)
       pure (LoopReturn ())
 
-    ------------------------------------------------------------------
     -- return; DENTRO de una función
-    ------------------------------------------------------------------
+
     Just ref -> do
       emit (indentStr ind ++ "mAlready <- readIORef " ++ ref)
       emit (indentStr ind ++ "case mAlready of")
@@ -408,14 +478,13 @@ evalComm ReturnVoid ind = do
         ( indentStr (ind + 2)
             ++ "Nothing -> writeIORef "
             ++ ref
-            ++ " (Just ())"
+            ++ " (Just 0)"
         )
       -- propagamos el control: LoopReturn lleva siempre un valor (aquí ())
       pure (LoopReturn ())
 
---------------------------------------------------------------------
--- c1 ; c2   – ejecuta c2 sólo si no hubo break ni return en runtime
---------------------------------------------------------------------
+-- c1 ; c2   – ejecuta c2 sólo si no hubo break ni return en runtime 
+ 
 evalComm (Seq c1 c2) ind = do
   -- 1)  genera c1 y memoriza su control estático
   r1 <- evalComm c1 ind
@@ -456,7 +525,7 @@ evalComm (Seq c1 c2) ind = do
 
   -- 6)  cierra guardia
   when needGuard $
-    emit (indentStr ind ++ "-- fin guardia")
+    emit (indentStr ind)
 
   -- 7)  combina controles estáticos
   return (mergeCtrl r1 r2)
@@ -467,9 +536,8 @@ evalComm (Seq c1 c2) ind = do
     mergeCtrl _ LoopBreak = LoopBreak
     mergeCtrl _ _ = Continue
 
--- ---------------------------------------------------------------
 -- break;            (sólo válido dentro de un while / for / do…)
--- ---------------------------------------------------------------
+
 evalComm Break ind = do
   brkRef <- getBreakRef -- IORef Bool del bucle actual
   emit (indentStr ind ++ "writeIORef " ++ brkRef ++ " True")
@@ -478,38 +546,117 @@ evalComm Break ind = do
 -- Scanf
 evalComm (Scanf _ exps) ind = do
   tmp <- freshTmp
-  emit (indentStr ind ++ tmp ++ " <- getLine")
-  emit (indentStr ind ++ "let ws = words " ++ tmp)
-  forM_ (zip exps [0 ..]) $ \(exp, i) -> case exp of
-    VarExp v -> do
-      ref <- lookupVarM v
-      mty <- gets (M.lookup v . typeInfo)
-      let expr = case mty of
-            Just TChar -> "head (ws !! " ++ show i ++ ")"
-            Just TInt -> "read (ws !! " ++ show i ++ ") :: Int32"
-            Just TFloat -> "read (ws !! " ++ show i ++ ") :: Float"
-            Just TDouble -> "read (ws !! " ++ show i ++ ") :: Double"
-            Just TString -> "ws !! " ++ show i
-            _ -> "read (ws !! " ++ show i ++ ") :: Int32"
-      emit (indentStr ind ++ "writeIORef " ++ ref ++ " (" ++ expr ++ ")")
-    ArrayAccess arr idxExp -> do
-      refArr <- lookupVarM arr
-      idxTok <- evalExp idxExp ind
-      tmpArr <- freshTmp
-      emit (indentStr ind ++ tmpArr ++ " <- readIORef " ++ refArr)
-      -- Por ahora asumimos que el array es de Int, pero podrías ajustar por tipo si querés
-      emit
-        ( indentStr ind
-            ++ "A.writeArray "
-            ++ tmpArr
-            ++ " "
-            ++ idxTok
-            ++ " (read (ws !! "
-            ++ show i
-            ++ ") :: Int32)"
-        )
-    _ -> error "scanf: solo soporta variables simples o acceso tipo arr[i]"
+  emit $ indentStr ind ++ tmp ++ " <- getLine"
+  emit $ indentStr ind ++ "let ws = words " ++ tmp
+  forM_ (zip exps [0..]) $ \(exp, i) ->
+    case exp of
+      -- variable simple (l-value)
+      VarExp v -> do
+        ref  <- lookupVarM v
+        mty  <- gets (M.lookup v . typeInfo)
+        case mty of
+          -- (a) char *nombre  ▸ copiar string en el buffer apuntado
+          Just (TPtr TChar) -> do
+            tmpBuf <- freshTmp
+            emit $ indentStr ind ++ tmpBuf ++ " <- readIORef " ++ ref
+            let w = "ws !! " ++ show i
+            emit $ indentStr ind ++
+              "sequence_ $ zipWith (A.writeArray " ++ tmpBuf ++ ") [0..] (" ++ w ++ " ++ \"\\0\")"
+
+          -- (b) int *x  ▸ escribir entero en la celda apuntada
+          Just (TPtr TInt) -> do
+            tmpPtr <- freshTmp
+            emit $ indentStr ind ++ tmpPtr ++ " <- readIORef " ++ ref
+            emit $ indentStr ind ++
+              "writeIORef " ++ tmpPtr ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+
+          -- char  c
+          Just TChar ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (head (ws !! " ++ show i ++ "))"
+
+          -- char nombre[SIZE]
+          Just (TArray TChar size) -> do
+            let w = "ws !! " ++ show i
+            tmpArr <- freshTmp
+            emit $ indentStr ind ++ tmpArr ++
+              " <- A.newListArray (0," ++ show (size-1) ++
+              ") (take " ++ show size ++ " (" ++ w ++ " ++ repeat '\\0'))"
+            emit $ indentStr ind ++ "writeIORef " ++ ref ++ " " ++ tmpArr
+
+          -- enteros y flotantes simples
+          Just TInt    ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+          Just TFloat  ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Float)"
+          Just TDouble ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Double)"
+          Just TString ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (ws !! " ++ show i ++ ")"
+
+          -- fallback genérico
+          _ ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+
+      -- acceso a arreglo: arr[idx]
+      ArrayAccess arr idxExp -> do
+        refArr <- lookupVarM arr
+        idxTok <- evalExp idxExp ind
+        tmpArr <- freshTmp
+        emit $ indentStr ind ++ tmpArr ++ " <- readIORef " ++ refArr
+        emit $ indentStr ind ++
+          "A.writeArray " ++ tmpArr ++ " " ++ idxTok ++
+          " (read (ws !! " ++ show i ++ ") :: Int32)"
+
+      -- acceso a campo de struct: var.fld
+      FieldAccess (VarExp v) fld -> do
+        let logical = v ++ "." ++ fld
+        ref <- lookupVarM logical
+        mty <- gets (M.lookup logical . typeInfo)
+        case mty of
+          Just TChar ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (head (ws !! " ++ show i ++ "))"
+
+          Just (TArray TChar size) -> do
+            let w = "ws !! " ++ show i
+            tmpArr <- freshTmp
+            emit $ indentStr ind ++ tmpArr ++
+              " <- A.newListArray (0," ++ show (size-1) ++
+              ") (take " ++ show size ++ " (" ++ w ++ " ++ repeat '\\0'))"
+            emit $ indentStr ind ++ "writeIORef " ++ ref ++ " " ++ tmpArr
+
+          Just TInt    ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+          Just TFloat  ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Float)"
+          Just TDouble ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Double)"
+          Just TString ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (ws !! " ++ show i ++ ")"
+          _ ->
+            emit $ indentStr ind ++
+              "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+
+      -- *ptr = valor
+      Deref e -> do
+        ref <- getRefOfLValue (Deref e) ind
+        emit $ indentStr ind ++
+          "writeIORef " ++ ref ++ " (read (ws !! " ++ show i ++ ") :: Int32)"
+
+      _ -> error "scanf: expresión no válida como lvalue"
+
   continue_
+
 
 -- 4.5  bloque con scope { … }
 evalComm (Block body) ind = do
@@ -522,21 +669,40 @@ evalComm (Block body) ind = do
 evalComm (Printf fmt args) ind = do
   argChunks <-
     mapM
-      ( \a -> do
-          mTypes <- gets typeInfo
-          case a of
-            VarExp v
-              | Just (TArray TChar sz) <- M.lookup v mTypes -> do
-                  ref <- lookupVarM v
-                  tmpArr <- freshTmp
-                  tmpStr <- freshTmp
-                  emit (indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref)
-                  emit (indentStr ind ++ tmpStr ++ " <- readCString " ++ tmpArr ++ " " ++ show sz)
-                  modify (\st -> st { usesReadCString = True })
-                  pure ([], tmpStr)
-            _ -> do
-              tok <- evalExp a ind
-              pure ([], tok)
+      (\a -> do
+        mTypes <- gets typeInfo
+        case a of
+          VarExp v
+            | Just (TPtr TChar)     <- M.lookup v mTypes -> emitStrArg v
+            | Just (TArray TChar _) <- M.lookup v mTypes -> emitStrArg v
+
+            where
+              emitStrArg v = do
+                ref     <- lookupVarM v                     -- IORef (IOArray …)
+                tmpArr  <- freshTmp
+                tmpStr  <- freshTmp
+                emit $ indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref
+                -- tamaño = hi-lo+1  (lo casi siempre 0)
+                emit $ indentStr ind ++ "(lo,hi) <- A.getBounds " ++ tmpArr
+                emit $ indentStr ind ++ tmpStr ++
+                       " <- readCString " ++ tmpArr ++ " (fromIntegral (hi-lo+1))"
+                modify (\st -> st{usesReadCString = True})
+                pure ([], tmpStr)
+
+          FieldAccess (VarExp v) fld
+            | Just (TArray TChar sz) <- M.lookup (v ++ "." ++ fld) mTypes -> do
+                ref <- lookupVarM (v ++ "." ++ fld)
+                tmpArr <- freshTmp
+                tmpStr <- freshTmp
+                emit (indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref)
+                emit (indentStr ind ++ tmpStr ++ " <- readCString " ++ tmpArr ++ " " ++ show sz)
+                modify (\st -> st { usesReadCString = True })
+                pure ([], tmpStr)
+
+          _ -> do
+            tok <- evalExp a ind
+            let val = tok
+            pure ([], val)
       )
       args
 
@@ -544,6 +710,7 @@ evalComm (Printf fmt args) ind = do
   mapM_ emit presLines
   emit putLn
   continue_
+
 
 -- evalComm COND
 evalComm (Cond cond cThen Skip) ind = do
@@ -577,9 +744,7 @@ evalComm (Cond cond cThen cElse) ind | not (isSkip cElse) = do
   where
     indStr = indentStr ind
 
---------------------------------------------------------------------
 -- while (cond) { body }   – controla ‘return’ y ‘break’
---------------------------------------------------------------------
 evalComm (While cond body) ind = do
   loop <- freshTmp -- nombre del closure recursivo
   brkRef <- freshTmp -- IORef Bool  ← flag de break
@@ -625,8 +790,7 @@ evalComm (While cond body) ind = do
   popBreakRef
   continue_
 
---------------------------------------------------------------------
--- for (init; cond; step) { body }   – motor exacto, break/return
+-- for (init; cond; step) { body }   –  break/return
 --------------------------------------------------------------------
 evalComm (For mInit cond mStep body) ind = do
   -- 0) scope propio del for
@@ -685,9 +849,7 @@ evalComm (For mInit cond mStep body) ind = do
   popScope
   continue_
 
---------------------------------------------------------------------
 -- do { body } while (cond);        – controla break / return
---------------------------------------------------------------------
 evalComm (DoWhile body cond) ind = do
   loop <- freshTmp -- nombre del cierre recursivo  (tmpN)
   brkRef <- freshTmp -- IORef Bool  ← flag de break
@@ -750,21 +912,16 @@ evalComm (DoWhile body cond) ind = do
   popBreakRef
   continue_
 
---------------------------------------------------------
 --  switch (expr) { … }
---------------------------------------------------------
 evalComm (Switch scrut sections) ind = do
-  ------------------------------------------------------------------
-  -- 0)  Evaluamos la expresión discriminante  **una sola vez**
-  ------------------------------------------------------------------
+  --  Evaluamos la expresión discriminante 
   scrTok <- evalExp scrut ind -- token con el valor
-
-  ------------------------------------------------------------------
-  -- 1)  IORefs internas
-  --     • brkRef    → flag de break
-  --     • matched   → ya hubo match (para fall-through)
-  --     • mRet      → IORef (Maybe a) si la función puede ‘return’
-  ------------------------------------------------------------------
+  {-
+        IORefs internas
+        brkRef    → flag de break
+        matched   → ya hubo match 
+        mRet      → IORef (Maybe a) si la función puede ‘return’
+  -}
   brkRef <- freshTmp
   matchedRef <- freshTmp
   emit (indentStr ind ++ brkRef ++ " <- newIORef False")
@@ -773,9 +930,7 @@ evalComm (Switch scrut sections) ind = do
 
   mRet <- getRetSlot -- Nothing en ‘main’ o funciones void
 
-  ------------------------------------------------------------------
-  -- 2)  Generador de una única sección  (Case / DefaultCase)
-  ------------------------------------------------------------------
+  --   Generador de una única sección  (Case / DefaultCase)
   let genCase :: Case -> Gen (LoopCtrl ())
       --------------------------------------------------------------
       genCase (Case lbl body) = do
@@ -833,10 +988,8 @@ evalComm (Switch scrut sections) ind = do
         popScope
         pure rc
 
-      --------------------------------------------------------------
-      -- 3)  Recorremos todas las secciones.
+      --   Recorremos todas las secciones.
       --     allRet == True  ↔  todas las ramas vistas terminan con return
-      --------------------------------------------------------------
       walk :: [Case] -> Bool -> Gen (LoopCtrl ())
       walk [] allRet =
         if allRet then pure (LoopReturn ()) else continue_
@@ -850,9 +1003,7 @@ evalComm (Switch scrut sections) ind = do
 
   res <- walk sections True
 
-  ------------------------------------------------------------------
-  -- 4)  Limpieza y retorno
-  ------------------------------------------------------------------
+  --  Limpieza y retorno
   popBreakRef
   return res
 
@@ -869,9 +1020,7 @@ evalComm (AssignDeref lhs rhs) ind = do
 evalComm other _ =
   error $ "evalComm: caso aún no implementado → " ++ show other
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER EVALEXP
---------------------------------------------------------------------------------
+-- EVALEXP
 
 evalExp :: Exp -> Int -> Gen String
 -- literales
@@ -911,9 +1060,7 @@ evalExp (DivExp e1 e2) ind = do
     then pure $ "(" ++ t1 ++ " `div` " ++ t2 ++ ")" -- caso 100 % Int
     else pure $ "(" ++ cast int1 t1 ++ " / " ++ cast int2 t2 ++ ")"
 evalExp (ModExp e1 e2) ind = binArith "`mod`" e1 e2 ind
--- -------------------------------------------------------------
 --  sqrt(e)          pow(base, exp)          log2(e)
--- -------------------------------------------------------------
 evalExp (Sqrt e) ind = do
   t <- evalExp e ind
   isI <- isIntExp e
@@ -974,25 +1121,29 @@ evalExp (CallExp fn args) ind = do
   emit (indentStr ind ++ tmp ++ " <- " ++ unwords (fn : toks))
   pure tmp
 
+--  (punteros se implementarán más tarde)
+evalExp (AddrOf e) _ind =          -- <<– sin emitir código
+  getRefOfLValue e _ind            --    simplemente entrega la IORef
 
--- Evaluador.hs  · evalExp
-evalExp (AddrOf e) ind = do
-  -- devolvemos directamente la IORef del l-value,
-  -- SIN envolverla en otro newIORef
-  getRefOfLValue e ind
-
-
--- Evaluador.hs  · evalExp
 evalExp (Deref e) ind = do
-  ptr <- evalExp e ind              -- IORef base
+  ptr <- evalExp e ind
   tmp <- freshTmp
   emit (indentStr ind ++ tmp ++ " <- readIORef " ++ ptr)
+  pure tmp
+
+
+evalExp (FieldAccess (VarExp v) fld) ind = do          -- p.edad
+  ref <- lookupVarM (v ++ "." ++ fld)
+  tmp <- freshTmp
+  emit (indentStr ind ++ tmp ++ " <- readIORef " ++ ref)
   pure tmp
 
 
 -- cualquier otra expresión aún no implementada
 evalExp other _ =
   error $ "evalExp: constructor aún no soportado → " ++ show other
+
+--EVALBOOLEXP
 
 evalBoolExp :: BoolExp -> Int -> Gen String
 evalBoolExp BTrue _ = pure "True"
@@ -1022,9 +1173,7 @@ cmp op e1 e2 ind = do
   t2 <- evalExp e2 ind
   pure $ "(" ++ t1 ++ " " ++ op ++ " " ++ t2 ++ ")"
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER HELPER EVALEXP
---------------------------------------------------------------------------------
+-- VER HELPER EVALEXP
 
 -- | Operadores binarios aritméticos  (+ – * / mod)
 binArith :: String -> Exp -> Exp -> Int -> Gen String
@@ -1054,9 +1203,7 @@ mutateVar v delta isPre ind = do
       then "(" ++ oldT ++ " " ++ delta ++ ")"
       else oldT
 
-------------------------------------------------------------
 -- ¿Podemos asegurar que la expresión es entera? (≈ TInt)
-------------------------------------------------------------
 bothInt :: Exp -> Exp -> Gen Bool
 bothInt a b = (&&) <$> isIntExp a <*> isIntExp b
 
@@ -1073,32 +1220,22 @@ isIntExp (MulExp a b) = bothInt a b
 isIntExp (ModExp _ _) = pure True -- “a mod b” siempre usa enteros
 isIntExp _ = pure False -- caso conservador
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER HELPER PRINTF
---------------------------------------------------------------------------------
+{- HELPER PRINTF
+Traducción básica de printf (solo %d, %ld, %f, %lf, %s, %c)
 
--- Traducción básica de printf (solo %d, %ld, %f, %lf, %s, %c)
-
--- | Genera el código Haskell correspondiente a un printf.
---   • ind   = nivel de indentación (en espacios)
---   • fmt   = literal de formato de C (ej. "El valor es %d\n")
---   • chunks= lista de pares (líneas previas, token) para cada argumento ya evaluado
---   Devuelve: (líneas previas totales, línea putStrLn lista)
-translatePrintf ::
-  -- | indentación
-  Int ->
-  -- | formato printf
-  String ->
-  -- | (pres, token) por argumento
-  [([String], String)] ->
-  -- | (pres totales, línea final)
-  ([String], String)
+ | Genera el código Haskell correspondiente a un printf.
+    ind   = nivel de indentación (en espacios)
+    fmt   = literal de formato de C (ej. "El valor es %d\n")
+    chunks= lista de pares (líneas previas, token) para cada argumento ya evaluado
+   Devuelve: (líneas previas totales, línea putStrLn lista)
+-}
+translatePrintf ::Int -> String ->[([String], String)] -> ([String], String)
 translatePrintf ind fmt chunks =
   let pres = concatMap fst chunks
       toks = map snd chunks
       fmtClean = filter (/= '\n') fmt --  quitamos '\n'
       body = "\"" ++ build fmtClean toks --  abrimos la comilla
-      ioLn = indentStr ind ++ "putStrLn (" ++ body ++ ")" -- ③ cerramos paréntesis
+      ioLn = indentStr ind ++ "putStrLn (" ++ body ++ ")" -- cerramos paréntesis
    in (pres, ioLn)
   where
     build :: String -> [String] -> String
@@ -1117,11 +1254,8 @@ translatePrintf ind fmt chunks =
       "\" ++ [ " ++ t ++ " ] ++ \"" ++ build xs ts
     build (c : cs) ts = c : build cs ts
 
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------VER HELPER EXTRAS
---------------------------------------------------------------------------------
+-- HELPER EXTRAS
 
--- Funcion usada en Main.hs, sirve para que el codigo generado al runearlo se ponga en un archivo .hs
 generateCode :: Comm -> [String]
 generateCode ast = alignLines raw
   where
@@ -1129,6 +1263,12 @@ generateCode ast = alignLines raw
 
 indentStr :: Int -> String
 indentStr n = replicate n ' '
+
+
+-- | Convierte un identifier lógico (puede contener '.') en un identifier
+--   Haskell válido, reemplazando todo lo que no sea alfa‑num por '_'.
+sanitize :: Variable -> Variable
+sanitize = map (\c -> if isAlphaNum c then c else '_')
 
 freshTmp :: Gen String
 freshTmp = do
@@ -1149,21 +1289,13 @@ translateType TLong = "Integer"
 translateType TShort = "Int32"
 translateType TString = "String"
 translateType TVoid = "()"
-translateType (TPtr t) = "IORef (" ++ translateType t ++ ")"
+translateType (TPtr TChar) = "A.IOArray Int32 Char"
+translateType (TPtr t) = "IORef " ++ translateType t
 translateType (TArray t _) = "A.IOArray Int32 " ++ translateType t
 
 -- | Crea (A.newArray (0,size-1) initTok) asegurando que la
 --   anotación de tipo no quede duplicada.
-genNewArray ::
-  -- | tipo base del array
-  Type ->
-  -- | tamaño
-  Int ->
-  -- | token del valor inicial (puede llevar :: …)
-  String ->
-  -- | indent
-  Int ->
-  Gen String
+genNewArray ::Type -> Int -> String -> Int -> Gen String
 genNewArray t size initTok ind = do
   tmpArr <- freshTmp
   emit $
@@ -1220,4 +1352,11 @@ readCStringDecl =
     "                 rest <- go (i+1)",
     "                 return (c : rest)"
   ]
+
+
+-----------------------------------------------------------
+bindParam :: (Type, Variable) -> Int -> Gen ()
+bindParam (t, v) ind = do
+  ref <- declareVar v t           -- nombre lógico → binding
+  emit (indentStr ind ++ ref ++ " <- newIORef " ++ v)
 

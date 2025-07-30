@@ -16,6 +16,7 @@ data Type
     | TVoid
     | TArray Type Int
     | TPtr Type       -- puntero a un tipo dado
+    | TStruct String 
     deriving (Show, Eq)
 
 -- Expresiones (sólo aritméticas)
@@ -44,6 +45,7 @@ data Exp
     | AddrOf Exp        -- &e    (tomar dirección)
     | Deref  Exp        -- *e    (desreferenciar)
     | ArrayAccess Variable Exp -- arr[i]
+    | FieldAccess Exp Variable
     deriving (Show, Eq)
 
 -- Expresiones Booleanas, separadas
@@ -70,7 +72,6 @@ data Comm
     | Assign  Variable Exp
     | Seq Comm Comm
     | Cond BoolExp Comm Comm   -- if cond then c1 else c2
-    -- CondNoElse BoolExp Comm
     | Repeat Comm BoolExp      -- repeat c until cond
     | Break  
     | FuncDef Type Variable [(Type, Variable)] Comm
@@ -86,6 +87,8 @@ data Comm
     | AssignArr Variable Exp Exp  -- arr[i] = e;
     | Switch Exp [Case]         -- switch (e) { … }
     | AssignDeref Exp Exp   -- *p = e;
+    | StructDef String [(Type, Variable)]
+    | AssignField Variable Variable Exp
     deriving (Show, Eq)
 
 data Case
