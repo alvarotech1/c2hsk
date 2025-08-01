@@ -6,14 +6,8 @@ import Parser (parseComm)
 import Evaluador(generateCode)
 
 main :: IO ()
-main = do
-    -- puedes usar getArgs si deseas pasarle el archivo por parámetro
-    -- arg:_ <- getArgs
-    -- run arg
+main = return()
 
-    -- O simplemente forzar a leer "test.lis" para pruebas:
-    let testFile = "test.lis"
-    run testFile
 
 -- Ejecuta un programa C, genera y guarda el .hs correspondiente
 run :: FilePath -> IO ()
@@ -34,4 +28,4 @@ run ifile = do
           let outFile = replaceExtension ifile "hs"
           writeFile outFile codeStr
 
-          
+

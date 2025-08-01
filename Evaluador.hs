@@ -173,7 +173,7 @@ spanImports =
 -- EVALCOMM
  
 evalComm :: Comm -> Int -> Gen (LoopCtrl ())
--- 4.1  skip
+--  skip
 evalComm Skip _ = continue_
 --  Definición de main  (con slot de retorno unificado)
 evalComm (FuncDef retT "main" _ body) ind = do
@@ -188,11 +188,11 @@ evalComm (FuncDef retT "main" _ body) ind = do
   emit "main :: IO ()"
   emit "main = do"
 
-  -- 0) registrar el tipo de la función actual
+  --  registrar el tipo de la función actual
   oldTy <- gets currentFnType
   modify $ \e -> e {currentFnType = Just retT}
 
-  -- 1) slot de retorno (bandera)
+  --  slot de retorno (bandera)
   retRef <- freshTmp
   emit
     ( indentStr (ind + 2)
@@ -202,17 +202,17 @@ evalComm (FuncDef retT "main" _ body) ind = do
         ++ ")"
     )
 
-  -- 2) enlazar el slot en el entorno
+  --  enlazar el slot en el entorno
   oldSlot <- gets retSlot
   modify $ \e -> e {retSlot = Just retRef}
 
-  -- 3) cuerpo real del programa
+  --  cuerpo real del programa
   _ <- evalComm body (ind + 2)
 
-  -- 4) restaurar entorno
+  --  restaurar entorno
   modify $ \e -> e {retSlot = oldSlot, currentFnType = oldTy}
 
-  -- 5) fin
+  --  fin
   emit (indentStr (ind + 2) ++ "return ()")
   continue_
 
@@ -220,7 +220,7 @@ evalComm (FuncDef retT "main" _ body) ind = do
  
 evalComm (FuncDef retT name params body) ind
   | name /= "main" = do
-      -- 1) firma de tipo y cabecera
+      --  firma de tipo y cabecera
       let paramTys = map (translateType . fst) params
           retTyStr = if retT == TVoid then "()" else translateType retT
           typeSig =
@@ -233,14 +233,14 @@ evalComm (FuncDef retT name params body) ind
       emit typeSig
       emit (name ++ " " ++ unwords (map snd params) ++ " = do")
 
-      -- 2) scope léxico propio
+      -- scope léxico propio
       pushScope
 
-      -- 3) parámetros en IORefs (con helper que evita doble IORef)
+      --  parámetros en IORefs (con helper que evita doble IORef)
       forM_ params $ \p ->
         bindParam p (ind + 2)
 
-      -- 4) preparar slot de retorno (siempre, también en void)
+      --  preparar slot de retorno (siempre, también en void)
       oldSlot <- gets retSlot
       oldTy <- gets currentFnType
       modify $ \e -> e {currentFnType = Just retT}
@@ -256,10 +256,10 @@ evalComm (FuncDef retT name params body) ind
         )
       modify $ \e -> e {retSlot = Just retRef}
 
-      -- 5) cuerpo de la función
+      --  cuerpo de la función
       resBody <- evalComm body (ind + 2)
 
-      -- 6) epílogo: devolver valor o unit
+      --  epílogo: devolver valor o unit
       case retT of
         TVoid -> emit (indentStr (ind + 2) ++ "return ()")
         _ -> do
@@ -273,11 +273,11 @@ evalComm (FuncDef retT name params body) ind
                 ++ "\\\" termino sin ejecutar return\""
             )
 
-      -- 7) restaurar entorno y cerrar scope
+      --  restaurar entorno y cerrar scope
       modify $ \e -> e {retSlot = oldSlot, currentFnType = oldTy}
       popScope
 
-      -- 8) propagar control
+      --  propagar control
       case resBody of
         LoopReturn _ -> continue_
         LoopBreak -> error "break fuera de un bucle"
@@ -317,7 +317,7 @@ evalComm (StructDef nm campos) _ = do                   -- NEW
   registerStruct nm campos
   continue_
 
--- 2) Declaración sin inicializador:  struct Persona p;
+-- Declaración sin inicializador:  struct Persona p;
 
 evalComm (LetUninit (TStruct nm) var) ind = do          -- NEW
   flds <- fieldsOf nm
@@ -327,7 +327,7 @@ evalComm (LetUninit (TStruct nm) var) ind = do          -- NEW
      emit (indentStr ind ++ ref ++ " <- newIORef " ++ defaultInit t)
   continue_
 
--- 3) Asignación a campo  p.edad = expr;
+-- Asignación a campo  p.edad = expr;
 
 evalComm (AssignField obj fld rhs) ind = do            -- NEW
   ref <- lookupVarM (obj ++ "." ++ fld)
@@ -365,7 +365,7 @@ evalComm (LetType (TArray t size) v rhs) ind = do
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ arrTmp)
   continue_
 
--- 4.2  declaración con inicializador:  int x = 5;
+--  declaración con inicializador:  int x = 5;
 evalComm (LetType t v rhs) ind = do
   ref <- declareVar v t
   rhsT <- evalExp rhs ind
@@ -382,11 +382,8 @@ evalComm (LetUninit (TArray t size) v) ind = do
 
 -- int x; o char nombre[100];  (sin inicializador)
 evalComm (LetUninit t v) ind = do
-  let t' = case t of
-        TArray TChar _ -> TString -- Si es char[], lo tomamos como string
-        _ -> t
-  ref <- declareVar v t'
-  let initVal = defaultInit t'
+  ref <- declareVar v t
+  let initVal = defaultInit t
   emit (indentStr ind ++ ref ++ " <- newIORef " ++ initVal)
   continue_
 
@@ -486,14 +483,14 @@ evalComm ReturnVoid ind = do
 -- c1 ; c2   – ejecuta c2 sólo si no hubo break ni return en runtime 
  
 evalComm (Seq c1 c2) ind = do
-  -- 1)  genera c1 y memoriza su control estático
+  --   genera c1 y memoriza su control estático
   r1 <- evalComm c1 ind
 
-  -- 2)  refs para checkear break / return en runtime
+  --   refs para checkear break / return en runtime
   mBrk <- gets breakStack -- [] si no estamos dentro de un bucle
   mRet <- getRetSlot -- Nothing si función void / en main
 
-  -- 3)  cabecera del guardia
+  --   cabecera del guardia
   let guardHeader = case (mBrk, mRet) of
         (b : _, Just r) ->
           -- break + return
@@ -516,24 +513,25 @@ evalComm (Seq c1 c2) ind = do
       -- NO ponemos la guardia si alguno de los dos lados es solo declaración
       needGuard = (not . null) guardHeader && not (isDecl c2) && not (isSkip c2)
 
-  -- 4)  abre guardia si hace falta
+  --   abre guardia si hace falta
   when needGuard $
     mapM_ emit guardHeader
 
-  -- 5) genera c2 …
+  --  genera c2 …
   r2 <- evalComm c2 (if needGuard then inner else ind)
 
-  -- 6)  cierra guardia
+  --   cierra guardia
   when needGuard $
     emit (indentStr ind)
 
-  -- 7)  combina controles estáticos
+  --   combina controles estáticos
   return (mergeCtrl r1 r2)
   where
     mergeCtrl (LoopReturn _) _ = LoopReturn ()
-    mergeCtrl LoopBreak (LoopReturn _) = LoopReturn ()
+    mergeCtrl LoopBreak (LoopReturn _) = LoopReturn ()   -- break + return
     mergeCtrl LoopBreak _ = LoopBreak
     mergeCtrl _ LoopBreak = LoopBreak
+    mergeCtrl _ (LoopReturn _) = LoopReturn ()   
     mergeCtrl _ _ = Continue
 
 -- break;            (sólo válido dentro de un while / for / do…)
@@ -658,7 +656,7 @@ evalComm (Scanf _ exps) ind = do
   continue_
 
 
--- 4.5  bloque con scope { … }
+--   bloque con scope { … }
 evalComm (Block body) ind = do
   pushScope
   res <- evalComm body ind
@@ -723,7 +721,7 @@ evalComm (Cond cond cThen Skip) ind = do
   where
     indStr = indentStr ind
 
--- A) if … con else  (cElse NO es Skip)
+--  if … con else  (cElse NO es Skip)
 evalComm (Cond cond cThen cElse) ind | not (isSkip cElse) = do
   tok <- evalBoolExp cond ind
   emit $ indStr ++ "if " ++ tok ++ " then do"
@@ -750,23 +748,23 @@ evalComm (While cond body) ind = do
   brkRef <- freshTmp -- IORef Bool  ← flag de break
   mRet <- getRetSlot -- IORef (Maybe a) o Nothing
 
-  -- 0) flag break inicial a False
+  --  flag break inicial a False
   emit (indentStr ind ++ brkRef ++ " <- newIORef False")
   pushBreakRef brkRef -- lo empujamos al stack
 
-  -- 1) let loop = do
+  --  let loop = do
   let header = "let " ++ loop ++ " = do"
   emit (indentStr ind ++ header)
   let inner = ind + length header + 1 -- +1 por espacio
       deep x = x + 2
 
-  -- 2) chequeos previos
+  --  chequeos previos
   emit (indentStr inner ++ "quit <- readIORef " ++ brkRef)
   case mRet of
     Just r -> emit (indentStr inner ++ "done <- fmap isJust (readIORef " ++ r ++ ")")
     Nothing -> emit (indentStr inner ++ "let done = False")
 
-  -- 3) condición del while
+  --  condición del while
   cTok <- evalBoolExp cond inner
   emit
     ( indentStr inner
@@ -775,17 +773,18 @@ evalComm (While cond body) ind = do
         ++ ")) $ do"
     )
 
-  -- 4) cuerpo
+  --  cuerpo
   pushScope
   res <- evalComm body (deep inner) -- ⬅  bind en ‘res’
   popScope
 
-  -- 5) actuar según el resultado del cuerpo
+  --  actuar según el resultado del cuerpo
   case res of
     LoopReturn _ -> pure () -- corta todo
+    LoopBreak    -> pure ()
     _ -> emit (indentStr (deep inner) ++ loop)
 
-  -- 6) lanzar la primera llamada y salir del stack
+  --  lanzar la primera llamada y salir del stack
   emit (indentStr ind ++ loop)
   popBreakRef
   continue_
@@ -793,13 +792,13 @@ evalComm (While cond body) ind = do
 -- for (init; cond; step) { body }   –  break/return
 --------------------------------------------------------------------
 evalComm (For mInit cond mStep body) ind = do
-  -- 0) scope propio del for
+  --  scope propio del for
   pushScope
 
-  -- 1) ejecutamos ‘init’ si existe
+  --  ejecutamos ‘init’ si existe
   _ <- maybe continue_ (\c -> evalComm c ind) mInit
 
-  -- 2) preámbulo break/return
+  --  preámbulo break/return
   loop <- freshTmp
   brkRef <- freshTmp
   mRet <- getRetSlot
@@ -811,7 +810,7 @@ evalComm (For mInit cond mStep body) ind = do
   let inner = ind + length header + 1
       deep = inner + 2
 
-  -- 3) chequeos quit/done y condición
+  --  chequeos quit/done y condición
   emit (indentStr inner ++ "quit <- readIORef " ++ brkRef)
   case mRet of
     Just r ->
@@ -831,7 +830,7 @@ evalComm (For mInit cond mStep body) ind = do
         ++ ")) $ do"
     )
 
-  -- 4) body + step + recursión, todos dentro del guardia
+  --  body + step + recursión, todos dentro del guardia
   pushScope
   resBody <- evalComm body (deep)
   popScope
@@ -843,7 +842,7 @@ evalComm (For mInit cond mStep body) ind = do
       _ <- maybe continue_ (\s -> evalComm s deep) mStep
       emit (indentStr deep ++ loop) -- recursión
 
-  -- 5) primera llamada + limpieza
+  --  primera llamada + limpieza
   emit (indentStr ind ++ loop)
   popBreakRef
   popScope
@@ -855,17 +854,17 @@ evalComm (DoWhile body cond) ind = do
   brkRef <- freshTmp -- IORef Bool  ← flag de break
   mRet <- getRetSlot -- IORef (Maybe a) o Nothing
 
-  -- 0) flag break inicial a False
+  --  flag break inicial a False
   emit (indentStr ind ++ brkRef ++ " <- newIORef False")
   pushBreakRef brkRef -- lo subimos al stack
 
-  -- 1) let loop = do …
+  --  let loop = do …
   let header = "let " ++ loop ++ " = do"
   emit (indentStr ind ++ header)
   let inner = ind + length header + 1 -- indent dentro del let
       deep = inner + 2 -- indent para cuerpo
 
-  -- 2) chequeos quit / done antes de ejecutar el cuerpo
+  --  chequeos quit / done antes de ejecutar el cuerpo
   emit (indentStr inner ++ "quit <- readIORef " ++ brkRef)
   case mRet of
     Just r ->
@@ -879,12 +878,12 @@ evalComm (DoWhile body cond) ind = do
 
   emit (indentStr inner ++ "when (not quit && not done) $ do")
 
-  -- 3) cuerpo del do-while
+  --  cuerpo del do-while
   pushScope
   res <- evalComm body deep -- ← puede devolver LoopBreak / LoopReturn
   popScope
 
-  -- 4) si no hubo ‘return’ se evalúa la condición y, si procede, se recurre
+  --  si no hubo ‘return’ se evalúa la condición y, si procede, se recurre
   case res of
     LoopReturn _ -> pure () -- nada más: se sale del bucle
     _ -> do
@@ -907,7 +906,7 @@ evalComm (DoWhile body cond) ind = do
         )
       emit (indentStr (deep + 2) ++ loop) -- recursión
 
-  -- 5) primera llamada al cierre y limpieza
+  --  primera llamada al cierre y limpieza
   emit (indentStr ind ++ loop)
   popBreakRef
   continue_
@@ -1016,7 +1015,7 @@ evalComm (AssignDeref lhs rhs) ind = do
 
 
 
--- 4.6  cualquier otra construcción (if, while, etc.) → pendiente
+--   cualquier otra construcción (if, while, etc.) → pendiente
 evalComm other _ =
   error $ "evalComm: caso aún no implementado → " ++ show other
 
@@ -1183,16 +1182,7 @@ binArith op e1 e2 ind = do
   pure $ "(" ++ t1 ++ " " ++ op ++ " " ++ t2 ++ ")"
 
 -- | (++ / --)   escriben la IORef y devuelven tmp con el valor viejo o nuevo
-mutateVar ::
-  -- | variable a mutar
-  Variable ->
-  -- | operador ("+ 1"  o  "- 1")
-  String ->
-  -- | True → pre (devuelve nuevo); False → post (devuelve viejo)
-  Bool ->
-  -- | indent
-  Int ->
-  Gen String
+mutateVar :: Variable -> String -> Bool -> Int -> Gen String
 mutateVar v delta isPre ind = do
   ref <- lookupVarM v
   oldT <- freshTmp
@@ -1213,7 +1203,7 @@ isIntExp :: Exp -> Gen Bool
 isIntExp (IntExp _) = pure True
 isIntExp (VarExp v) = do
   mt <- gets (M.lookup v . typeInfo)
-  pure (mt == Just TInt)
+  pure (mt == Just TInt) 
 isIntExp (AddExp a b) = bothInt a b
 isIntExp (SubExp a b) = bothInt a b
 isIntExp (MulExp a b) = bothInt a b
@@ -1310,15 +1300,6 @@ genNewArray t size initTok ind = do
       ++ "))"
   pure tmpArr
 
-containsReturn :: Comm -> Bool -- ● nuevo
-containsReturn (Return _) = True
-containsReturn ReturnVoid = True
-containsReturn (Seq c1 c2) = containsReturn c1 || containsReturn c2
-containsReturn (Block b) = containsReturn b
-containsReturn (Cond _ t e) = containsReturn t || containsReturn e
-containsReturn _ = False
-
--- Valor “cero” SIN anotación de tipo
 
 -- | Valor “cero” con anotación de tipo incluida
 defaultInit :: Type -> String
