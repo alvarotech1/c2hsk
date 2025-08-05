@@ -25,7 +25,7 @@ type Scope = Map Variable Binding
 
 type StructDefs = Map String [(Type, Variable)] 
 
-data LoopCtrl a = Continue | LoopBreak | LoopReturn a
+data LoopCtrl a = Continue | LoopBreak | LoopReturn 
   deriving (Show, Eq)
 
 data Env = Env
@@ -33,7 +33,7 @@ data Env = Env
     counter :: Int, -- para nombres de IORef
     tmpCounter :: Int, -- para nombres de temporales
     typeInfo :: Map Variable Type, -- tipos de cada var lógica
-    retSlot :: Maybe String, -- ⇐ *** NUEVO ***  IORef (Maybe a) p/ return
+    retSlot :: Maybe String, -- IORef (Maybe a) para el return
     currentFnType :: Maybe Type,
     breakStack :: [String], -- ← pila de IORefs Bool, uno por bucle
     structDefs :: StructDefs, -- registra los structs definidos
@@ -157,7 +157,7 @@ alignLines :: [String] -> [String]
 alignLines lns =
   let (imports, others) = spanImports lns
       needCString = any (("readCString" `isInfixOf`) . dropWhile (== ' ')) others
-      extra = if needCString then [""] ++ readCStringDecl else []
+      extra = if needCString then "" : readCStringDecl else []
   in  imports ++ extra ++ [""] ++ others
 
 spanImports :: [String] -> ([String], [String])
@@ -279,7 +279,7 @@ evalComm (FuncDef retT name params body) ind
 
       --  propagar control
       case resBody of
-        LoopReturn _ -> continue_
+        LoopReturn  -> continue_
         LoopBreak -> error "break fuera de un bucle"
         Continue -> continue_
 
@@ -450,7 +450,7 @@ evalComm (Return expr) ind = do
         )
 
   -- Propagamos el control para que callers sepan que hubo ‘return’
-  return (LoopReturn ())
+  return LoopReturn
 
 --  Return   (sin valor)   ⇒   escribe () en el slot, si corresponde
 evalComm ReturnVoid ind = do
@@ -463,7 +463,7 @@ evalComm ReturnVoid ind = do
     Nothing -> do
       emit (indentStr ind ++ "error \"return fuera de contexto\"")
       -- avisamos al caller que hubo return (aunque nunca debería volver)
-      pure (LoopReturn ())
+      pure LoopReturn
 
     -- return; DENTRO de una función
 
@@ -478,7 +478,7 @@ evalComm ReturnVoid ind = do
             ++ " (Just 0)"
         )
       -- propagamos el control: LoopReturn lleva siempre un valor (aquí ())
-      pure (LoopReturn ())
+      pure LoopReturn 
 
 -- c1 ; c2   – ejecuta c2 sólo si no hubo break ni return en runtime 
  
@@ -527,11 +527,11 @@ evalComm (Seq c1 c2) ind = do
   --   combina controles estáticos
   return (mergeCtrl r1 r2)
   where
-    mergeCtrl (LoopReturn _) _ = LoopReturn ()
-    mergeCtrl LoopBreak (LoopReturn _) = LoopReturn ()   -- break + return
+    mergeCtrl LoopReturn _ = LoopReturn 
+    mergeCtrl LoopBreak LoopReturn = LoopReturn    -- break + return
     mergeCtrl LoopBreak _ = LoopBreak
     mergeCtrl _ LoopBreak = LoopBreak
-    mergeCtrl _ (LoopReturn _) = LoopReturn ()   
+    mergeCtrl _ LoopReturn = LoopReturn    
     mergeCtrl _ _ = Continue
 
 -- break;            (sólo válido dentro de un while / for / do…)
@@ -734,12 +734,10 @@ evalComm (Cond cond cThen cElse) ind | not (isSkip cElse) = do
   popScope
   -- propagá lo que corresponda
   case (rThen, rElse) of
-    (LoopReturn _, _) -> return (LoopReturn ())
-    (_, LoopReturn _) -> return (LoopReturn ())
-    (LoopBreak, _) -> return LoopBreak
-    (_, LoopBreak) -> return LoopBreak
-    _ -> continue_
-  where
+   (LoopReturn , LoopReturn ) -> return LoopReturn 
+   (LoopBreak, LoopBreak)       -> return LoopBreak
+   _                            -> continue_
+   where
     indStr = indentStr ind
 
 -- while (cond) { body }   – controla ‘return’ y ‘break’
@@ -780,9 +778,9 @@ evalComm (While cond body) ind = do
 
   --  actuar según el resultado del cuerpo
   case res of
-    LoopReturn _ -> pure () -- corta todo
+    LoopReturn  -> pure () -- corta todo
     LoopBreak    -> pure ()
-    _ -> emit (indentStr (deep inner) ++ loop)
+    _            -> emit (indentStr (deep inner) ++ loop)
 
   --  lanzar la primera llamada y salir del stack
   emit (indentStr ind ++ loop)
@@ -832,11 +830,11 @@ evalComm (For mInit cond mStep body) ind = do
 
   --  body + step + recursión, todos dentro del guardia
   pushScope
-  resBody <- evalComm body (deep)
+  resBody <- evalComm body deep
   popScope
 
   case resBody of
-    LoopReturn _ -> pure () -- corta todo
+    LoopReturn  -> pure () -- corta todo
     LoopBreak -> pure () -- quit=True ya marcado
     Continue -> do
       _ <- maybe continue_ (\s -> evalComm s deep) mStep
@@ -885,7 +883,7 @@ evalComm (DoWhile body cond) ind = do
 
   --  si no hubo ‘return’ se evalúa la condición y, si procede, se recurre
   case res of
-    LoopReturn _ -> pure () -- nada más: se sale del bucle
+    LoopReturn  -> pure () -- nada más: se sale del bucle
     _ -> do
       emit (indentStr deep ++ "quit <- readIORef " ++ brkRef)
       case mRet of
@@ -991,12 +989,12 @@ evalComm (Switch scrut sections) ind = do
       --     allRet == True  ↔  todas las ramas vistas terminan con return
       walk :: [Case] -> Bool -> Gen (LoopCtrl ())
       walk [] allRet =
-        if allRet then pure (LoopReturn ()) else continue_
+        if allRet then pure LoopReturn  else continue_
       walk (c : rest) allRet = do
         rc <- genCase c
         let allRet' =
               allRet && case rc of
-                LoopReturn _ -> True
+                LoopReturn  -> True
                 _ -> False
         walk rest allRet'
 
