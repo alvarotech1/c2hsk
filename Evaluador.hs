@@ -357,14 +357,6 @@ y eso rompe el comportamiento esperado en operaciones como: printf("%s", mensaje
 -}
   
 
--- int arr[5] = 7;
-evalComm (LetType (TArray t size) v rhs) ind = do
-  ref <- declareVar v t
-  rhsTok <- evalExp rhs ind
-  arrTmp <- genNewArray t size rhsTok ind
-  emit (indentStr ind ++ ref ++ " <- newIORef " ++ arrTmp)
-  continue_
-
 --  declaración con inicializador:  int x = 5;
 evalComm (LetType t v rhs) ind = do
   ref <- declareVar v t
