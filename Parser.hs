@@ -325,13 +325,8 @@ parseSwitch = do
     sections <- many1 parseSection
     reservedOp lis "}"
 
-    -- si hay default lo enviamos al final
-    let (defs , cases) = span isDefault sections
-        finalCases     = cases ++ defs
-    return (Switch scrut finalCases)
-  where
-    isDefault DefaultCase{} = True
-    isDefault _             = False
+    return (Switch scrut sections)
+      where
 
     -- Secciones  
     -- parseSection :: Parser Case

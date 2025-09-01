@@ -919,6 +919,14 @@ evalComm (Switch scrut sections) ind = do
 
   mRet <- getRetSlot -- Nothing en ‘main’ o funciones void
 
+  let caseLabels = [lbl | Case lbl _ <- sections]
+  lblToks <- mapM (\lbl -> evalExp lbl ind) caseLabels
+  let anyMatchTok =
+        case lblToks of
+          [] -> "False"
+          ts -> "(" ++ intercalate " || " (map (\t -> scrTok ++ " == " ++ t) ts) ++ ")"
+
+
   --   Generador de una única sección  (Case / DefaultCase)
   let genCase :: Case -> Gen (LoopCtrl ())
       --------------------------------------------------------------
@@ -957,20 +965,13 @@ evalComm (Switch scrut sections) ind = do
         emit (indentStr ind ++ "quit <- readIORef " ++ brkRef)
 
         case mRet of
-          Just r ->
-            emit
-              ( indentStr ind
-                  ++ "done <- fmap isJust (readIORef "
-                  ++ r
-                  ++ ")"
-              )
+          Just r  -> emit (indentStr ind ++ "done <- fmap isJust (readIORef " ++ r ++ ")")
           Nothing -> emit (indentStr ind ++ "let done = False")
 
         emit (indentStr ind ++ "matched <- readIORef " ++ matchedRef)
-        emit
-          ( indentStr ind
-              ++ "when (not quit && not done && not matched) $ do"
-          )
+        emit (indentStr ind ++
+              "when (not quit && not done && (matched || not " ++ anyMatchTok ++ ")) $ do")
+        emit (indentStr (ind + 2) ++ "writeIORef " ++ matchedRef ++ " True")  -- ← habilita fallthrough
 
         pushScope
         rc <- evalComm body (ind + 2)
