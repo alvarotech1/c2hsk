@@ -560,8 +560,6 @@ parseArrayAssign = do
     arr <- identifier lis
     idx <- brackets lis intexp
     reservedOp lis "="
-    -- si quisieras soportar boolexp aquí, podrías usar:
-    -- rhs <- try (BoolAsIntExp <$> boolexp) <|> intexp
     rhs <- intexp
     return (AssignArr arr idx rhs)
 
@@ -587,7 +585,6 @@ parseFuncDef :: Parser Comm
 parseFuncDef = do
     retType  <- typeParser
     funcName <- identifier lis
-    -- NOTA: Al usar 'parens lis', adentro también le pasamos 'lis' a commaSep.
     params <- parens lis (
             (reserved lis "void" >> return [])            -- f(void)  → lista vacía
             <|> commaSep lis parseParam                   -- resto de casos

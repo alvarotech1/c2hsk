@@ -511,6 +511,9 @@ evalComm (Seq c1 c2) ind = do
 
   --  genera c2 …
   r2 <- evalComm c2 (if needGuard then inner else ind)
+    
+  when needGuard $
+      emit (indentStr inner ++ "return ()")
 
   --   cierra guardia
   when needGuard $
@@ -655,7 +658,7 @@ evalComm (Block body) ind = do
   popScope
   return res -- propaga lo que venga de adentro (Continue, LoopBreak o LoopReturn)
 
--- Printf
+-- Printf   (Printf "Hola soy %s y tengo %d" [VarExp "nombre",VarExp "x"]) 
 evalComm (Printf fmt args) ind = do
   argChunks <-
     mapM
@@ -663,11 +666,16 @@ evalComm (Printf fmt args) ind = do
         mTypes <- gets typeInfo
         case a of
           VarExp v
-            | Just (TPtr TChar)     <- M.lookup v mTypes -> emitStrArg v
-            | Just (TArray TChar _) <- M.lookup v mTypes -> emitStrArg v
+            | Just (TPtr TChar)     <- M.lookup v mTypes -> emitStrArg1 v
+            | Just (TArray TChar _) <- M.lookup v mTypes -> emitStrArg2 v
 
             where
-              emitStrArg v = do
+              emitStrArg1 v = do
+                ref <- lookupVarM v
+                tmpStr <- freshTmp
+                emit $ indentStr ind ++ tmpStr ++ " <- readIORef " ++ ref
+                pure ([],tmpStr)
+              emitStrArg2 v = do
                 ref     <- lookupVarM v                     -- IORef (IOArray …)
                 tmpArr  <- freshTmp
                 tmpStr  <- freshTmp
@@ -1015,7 +1023,7 @@ evalComm other _ =
 evalExp :: Exp -> Int -> Gen String
 -- literales
 evalExp (IntExp n) _ = pure ("(" ++ show n ++ " :: Int32)")
-evalExp (FloatExp f) _ = pure (show f)
+evalExp (FloatExp f) _ = pure ("(" ++ show f ++ " :: Double)")
 evalExp (StringExp s) _ = pure (show s)
 evalExp (CharExp c) _ = pure (show c)
 -- variable (ya implementado)
