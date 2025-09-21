@@ -36,13 +36,12 @@ data Env = Env
     retSlot :: Maybe String, -- IORef (Maybe a) para el return
     currentFnType :: Maybe Type,
     breakStack :: [String], -- ← pila de IORefs Bool, uno por bucle
-    structDefs :: StructDefs, -- registra los structs definidos
-    usesReadCString :: Bool
+    structDefs :: StructDefs -- registra los structs definidos
   }
 
 emptyEnv :: Env
 emptyEnv =
-  Env [M.empty] 0 0 M.empty Nothing Nothing [] M.empty False
+  Env [M.empty] 0 0 M.empty Nothing Nothing [] M.empty
 
 -- | Devuelve la IORef donde se almacena el valor de ‘return’, si existe.
 getRetSlot :: Gen (Maybe String)
@@ -674,18 +673,15 @@ evalComm (Printf fmt args) ind = do
                 ref <- lookupVarM v
                 tmpStr <- freshTmp
                 emit $ indentStr ind ++ tmpStr ++ " <- readIORef " ++ ref
-                pure ([],tmpStr)
+                pure tmpStr
               emitStrArg2 v = do
-                ref     <- lookupVarM v                     -- IORef (IOArray …)
+                ref     <- lookupVarM v                    
                 tmpArr  <- freshTmp
                 tmpStr  <- freshTmp
                 emit $ indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref
-                -- tamaño = hi-lo+1  (lo casi siempre 0)
                 emit $ indentStr ind ++ "(lo,hi) <- A.getBounds " ++ tmpArr
-                emit $ indentStr ind ++ tmpStr ++
-                       " <- readCString " ++ tmpArr ++ " (fromIntegral (hi-lo+1))"
-                modify (\st -> st{usesReadCString = True})
-                pure ([], tmpStr)
+                emit $ indentStr ind ++ tmpStr ++ " <- readCString " ++ tmpArr ++ " (fromIntegral (hi-lo+1))"
+                pure tmpStr
 
           FieldAccess (VarExp v) fld
             | Just (TArray TChar sz) <- M.lookup (v ++ "." ++ fld) mTypes -> do
@@ -694,18 +690,16 @@ evalComm (Printf fmt args) ind = do
                 tmpStr <- freshTmp
                 emit (indentStr ind ++ tmpArr ++ " <- readIORef " ++ ref)
                 emit (indentStr ind ++ tmpStr ++ " <- readCString " ++ tmpArr ++ " " ++ show sz)
-                modify (\st -> st { usesReadCString = True })
-                pure ([], tmpStr)
+                pure tmpStr
 
           _ -> do
             tok <- evalExp a ind
             let val = tok
-            pure ([], val)
+            pure val
       )
       args
 
-  let (presLines, putLn) = translatePrintf ind fmt argChunks
-  mapM_ emit presLines
+  let putLn = translatePrintf ind fmt argChunks
   emit putLn
   continue_
 
@@ -1173,14 +1167,14 @@ cmp op e1 e2 ind = do
 
 -- VER HELPER EVALEXP
 
--- | Operadores binarios aritméticos  (+ – * / mod)
+--  Operadores binarios aritméticos  (+ – * / mod)
 binArith :: String -> Exp -> Exp -> Int -> Gen String
 binArith op e1 e2 ind = do
   t1 <- evalExp e1 ind
   t2 <- evalExp e2 ind
   pure $ "(" ++ t1 ++ " " ++ op ++ " " ++ t2 ++ ")"
 
--- | (++ / --)   escriben la IORef y devuelven tmp con el valor viejo o nuevo
+--  (++ / --)   escriben la IORef y devuelven tmp con el valor viejo o nuevo
 mutateVar :: Variable -> String -> Bool -> Int -> Gen String
 mutateVar v delta isPre ind = do
   ref <- lookupVarM v
@@ -1211,21 +1205,17 @@ isIntExp _ = pure False -- caso conservador
 
 {- HELPER PRINTF
 Traducción básica de printf (solo %d, %ld, %f, %lf, %s, %c)
-
- | Genera el código Haskell correspondiente a un printf.
-    ind   = nivel de indentación (en espacios)
-    fmt   = literal de formato de C (ej. "El valor es %d\n")
-    chunks= lista de pares (líneas previas, token) para cada argumento ya evaluado
-   Devuelve: (líneas previas totales, línea putStrLn lista)
+    ind    = nivel de indentación (en espacios)
+    fmt    = literal de formato de C (ej. "El valor es %d\n")
+    chunks = lista de argumentos del printf (nombre de variables de cada "%d, %ld, %f, %lf, %s, %c")
+   Devuelve: (línea putStrLn lista)
 -}
-translatePrintf ::Int -> String ->[([String], String)] -> ([String], String)
+translatePrintf :: Int -> String -> [String] -> String
 translatePrintf ind fmt chunks =
-  let pres = concatMap fst chunks
-      toks = map snd chunks
-      fmtClean = filter (/= '\n') fmt --  quitamos '\n'
-      body = "\"" ++ build fmtClean toks --  abrimos la comilla
+  let fmtClean = filter (/= '\n') fmt --  quitamos '\n'
+      body = "\"" ++ build fmtClean chunks --  abrimos la comilla
       ioLn = indentStr ind ++ "putStrLn (" ++ body ++ ")" -- cerramos paréntesis
-   in (pres, ioLn)
+   in ioLn
   where
     build :: String -> [String] -> String
     build [] _ = "\"" --  cerramos la comilla
@@ -1254,7 +1244,7 @@ indentStr :: Int -> String
 indentStr n = replicate n ' '
 
 
--- | Convierte un identifier lógico (puede contener '.') en un identifier
+--  Convierte un identifier lógico (puede contener '.') en un identifier
 --   Haskell válido, reemplazando todo lo que no sea alfa‑num por '_'.
 sanitize :: Variable -> Variable
 sanitize = map (\c -> if isAlphaNum c then c else '_')
@@ -1282,7 +1272,7 @@ translateType (TPtr TChar) = "A.IOArray Int32 Char"
 translateType (TPtr t) = "IORef " ++ translateType t
 translateType (TArray t _) = "A.IOArray Int32 " ++ translateType t
 
--- | Crea (A.newArray (0,size-1) initTok) asegurando que la
+--  Crea (A.newArray (0,size-1) initTok) asegurando que la
 --   anotación de tipo no quede duplicada.
 genNewArray ::Type -> Int -> String -> Int -> Gen String
 genNewArray t size initTok ind = do
@@ -1300,7 +1290,7 @@ genNewArray t size initTok ind = do
   pure tmpArr
 
 
--- | Valor “cero” con anotación de tipo incluida
+--  Valor “cero” con anotación de tipo incluida
 defaultInit :: Type -> String
 defaultInit TInt = "(0 :: Int32)"
 defaultInit TFloat = "(0.0 :: Float)"
@@ -1317,7 +1307,7 @@ defaultExp TDouble = FloatExp 0.0
 defaultExp TChar = CharExp '\0'
 defaultExp _ = IntExp 0
 
--- | Lee un array de Char hasta el primer '\0' y lo convierte en String
+--  Lee un array de Char hasta el primer '\0' y lo convierte en String
 readCStringDecl :: [String]
 readCStringDecl =
   [ "",
